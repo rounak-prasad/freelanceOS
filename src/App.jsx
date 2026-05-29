@@ -35,6 +35,11 @@ const RateCalculator = lazy(() => import('./pages/RateCalculator'));
 const BusinessHealth = lazy(() => import('./pages/BusinessHealth'));
 const ClientPortal = lazy(() => import('./pages/ClientPortal'));
 
+// India compliance moat
+const ComplianceGuardrails = lazy(() => import('./pages/ComplianceGuardrails'));
+const CrossBorder = lazy(() => import('./pages/CrossBorder'));
+const CashFlow = lazy(() => import('./pages/CashFlow'));
+
 function PageLoader() {
   return (
     <div className="flex items-center justify-center h-64">
@@ -56,7 +61,7 @@ export default function App() {
     if (state && startupRecurringCheck) {
       const today = new Date();
       today.setHours(0,0,0,0);
-      const due = (state.recurringSchedules || []).filter(s => 
+      const due = (state.recurringSchedules || []).filter(s =>
         s.isActive && new Date(s.nextDueDate) <= today
       );
       if (due.length > 0) {
@@ -98,13 +103,19 @@ export default function App() {
               <Route path="/time-tracker" element={<TimeTracker />} />
               <Route path="/projects" element={<Projects />} />
               <Route path="/settings" element={<Settings />} />
-              
+
               {/* New Pages */}
               <Route path="/scope-creep" element={<ScopeCreep />} />
               <Route path="/pipeline" element={<Pipeline />} />
               <Route path="/rate-calculator" element={<RateCalculator />} />
               <Route path="/health" element={<BusinessHealth />} />
               <Route path="/client-portal/:projectId" element={<ClientPortal />} />
+
+              {/* India compliance moat */}
+              <Route path="/guardrails" element={<ComplianceGuardrails />} />
+              <Route path="/cross-border" element={<CrossBorder />} />
+              <Route path="/cash-flow" element={<CashFlow />} />
+
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </Suspense>

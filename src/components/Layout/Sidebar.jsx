@@ -6,7 +6,8 @@ import {
   BarChart3, CalendarClock, Repeat, MessageCircle,
   FileSignature, ScrollText, Linkedin,
   Settings, ChevronLeft, ChevronRight, Menu, X, Zap,
-  Activity, Workflow, ShieldAlert, Timer, Briefcase
+  Activity, Workflow, ShieldAlert, Timer, Briefcase,
+  ShieldCheck, Globe, LineChart
 } from 'lucide-react';
 
 const navSections = [
@@ -14,6 +15,7 @@ const navSections = [
     items: [
       { path: '/', label: 'Dashboard', icon: LayoutDashboard },
       { path: '/health', label: 'Business Health', icon: Activity },
+      { path: '/guardrails', label: 'Compliance Guard', icon: ShieldCheck },
     ]
   },
   {
@@ -29,11 +31,13 @@ const navSections = [
     title: 'FINANCES',
     items: [
       { path: '/pipeline', label: 'Pipeline', icon: Workflow },
+      { path: '/cash-flow', label: 'Cash Flow', icon: LineChart },
       { path: '/invoice', label: 'GST Invoice', icon: FileText, activePaths: ['/invoices'] },
       { path: '/invoice-history', label: 'Invoice History', icon: History },
       { path: '/aging', label: 'Aging Report', icon: AlertTriangle },
       { path: '/expenses', label: 'Expenses', icon: Wallet },
       { path: '/tax', label: 'TDS & Tax', icon: Calculator },
+      { path: '/cross-border', label: 'Cross-Border & FIRA', icon: Globe },
       { path: '/gstr1', label: 'GSTR-1 Summary', icon: BarChart3 },
       { path: '/fy-summary', label: 'FY Summary', icon: CalendarClock },
       { path: '/reports', label: 'FY Report', icon: BarChart3 },

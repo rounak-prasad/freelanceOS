@@ -8,10 +8,11 @@ import {
   sampleMilestoneProjects, sampleRecurringSchedules, sampleChangeRequests,
   defaultSettings,
 } from '../utils/sampleData';
+// Backend-ready persistence layer (localStorage today, HTTP API when configured)
+import { loadState, saveState, clearState, backendMode } from '../services/persistence';
 
 const DataContext = createContext(null);
 
-const STORAGE_KEY = 'freelanceos_data';
 const DEFAULT_REVENUE_GOALS = defaultSettings.revenueGoals || { monthly: 150000, quarterly: 450000, annual: 1800000 };
 
 function normalizeSettings(settings = {}) {
@@ -50,6 +51,8 @@ function getDefaultState() {
     milestoneProjects: sampleMilestoneProjects,
     recurringSchedules: sampleRecurringSchedules,
     changeRequests: sampleChangeRequests,
+    foreignAccounts: [],
+    remittances: [],
     settings,
     activeTimer: null,
   };
@@ -58,9 +61,8 @@ function getDefaultState() {
 // ---- Initial State ----
 function getInitialState() {
   try {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored) {
-      const parsed = JSON.parse(stored);
+    const parsed = loadState();
+    if (parsed) {
       const settings = normalizeSettings(parsed.settings || {});
       const revenueGoals = parsed.revenueGoals || settings.revenueGoals || DEFAULT_REVENUE_GOALS;
       // Ensure all keys exist (merge with defaults for forward compat)
@@ -79,12 +81,14 @@ function getInitialState() {
         milestoneProjects: parsed.milestoneProjects || [],
         recurringSchedules: parsed.recurringSchedules || [],
         changeRequests: parsed.changeRequests || [],
+        foreignAccounts: parsed.foreignAccounts || [],
+        remittances: parsed.remittances || [],
         settings: { ...settings, revenueGoals },
         activeTimer: parsed.activeTimer || null,
       };
     }
   } catch (e) {
-    console.warn('Failed to load from localStorage:', e);
+    console.warn('Failed to load state:', e);
   }
 
   // First load — use sample data
@@ -191,6 +195,22 @@ function dataReducer(state, action) {
     case 'DELETE_CHANGE_REQUEST':
       return { ...state, changeRequests: state.changeRequests.filter(cr => cr.id !== action.payload) };
 
+    // -- Foreign Accounts (feeds the Schedule FA compliance check) --
+    case 'ADD_FOREIGN_ACCOUNT':
+      return { ...state, foreignAccounts: [...(state.foreignAccounts || []), action.payload] };
+    case 'UPDATE_FOREIGN_ACCOUNT':
+      return { ...state, foreignAccounts: (state.foreignAccounts || []).map(a => a.id === action.payload.id ? { ...a, ...action.payload } : a) };
+    case 'DELETE_FOREIGN_ACCOUNT':
+      return { ...state, foreignAccounts: (state.foreignAccounts || []).filter(a => a.id !== action.payload) };
+
+    // -- Cross-border remittances + FIRA tracking --
+    case 'ADD_REMITTANCE':
+      return { ...state, remittances: [action.payload, ...(state.remittances || [])] };
+    case 'UPDATE_REMITTANCE':
+      return { ...state, remittances: (state.remittances || []).map(r => r.id === action.payload.id ? { ...r, ...action.payload } : r) };
+    case 'DELETE_REMITTANCE':
+      return { ...state, remittances: (state.remittances || []).filter(r => r.id !== action.payload) };
+
     // -- Settings --
     case 'UPDATE_SETTINGS': {
       const settings = normalizeSettings({ ...state.settings, ...action.payload });
@@ -218,12 +238,12 @@ function dataReducer(state, action) {
 
     // -- Reset --
     case 'RESET_DATA':
-      localStorage.removeItem(STORAGE_KEY);
+      clearState();
       return getDefaultState();
     case 'LOAD_SAMPLE_DATA':
       return getDefaultState();
     case 'CLEAR_ALL_DATA':
-      localStorage.removeItem(STORAGE_KEY);
+      clearState();
       return {
         clients: [],
         invoices: [],
@@ -239,6 +259,8 @@ function dataReducer(state, action) {
         milestoneProjects: [],
         recurringSchedules: [],
         changeRequests: [],
+        foreignAccounts: [],
+        remittances: [],
         settings: normalizeSettings(defaultSettings),
         activeTimer: null,
       };
@@ -260,13 +282,10 @@ export function DataProvider({ children }) {
   const [state, dispatch] = useReducer(dataReducer, null, getInitialState);
   const [toasts, setToasts] = useState([]);
 
-  // Persist to localStorage on every change
+  // Persist on every change via the data-access layer (localStorage now,
+  // HTTP API when VITE_DATA_BACKEND=http — DataContext stays agnostic).
   useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    } catch (e) {
-      console.warn('Failed to save to localStorage:', e);
-    }
+    saveState(state);
   }, [state]);
 
   // Toast notification system
@@ -306,7 +325,7 @@ export function DataProvider({ children }) {
   }, [addToast]);
 
   return (
-    <DataContext.Provider value={{ state, dispatch, toasts, addToast, removeToast, exportData, importData }}>
+    <DataContext.Provider value={{ state, dispatch, toasts, addToast, removeToast, exportData, importData, backendMode }}>
       {children}
     </DataContext.Provider>
   );

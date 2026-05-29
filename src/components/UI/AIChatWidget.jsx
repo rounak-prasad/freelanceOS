@@ -1,9 +1,15 @@
 // ==========================================
 // FreelanceOS — Floating AI Data Assistant
 // ==========================================
+// NOTE: This widget now calls the FreelanceOS API proxy (/api/ai/chat) instead
+// of hitting api.anthropic.com directly from the browser. The old approach sent
+// no auth headers (so it ALWAYS failed and showed the fallback) and would have
+// exposed any API key to users. The key now lives safely on the server
+// (server/routes/ai.js). Set ANTHROPIC_API_KEY there to enable it.
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useData } from '../../context/DataContext';
 import { formatINR, calculateGST, getCurrentFY } from '../../utils/helpers';
+import { apiPost } from '../../services/apiClient';
 import { MessageSquare, Sparkles, Send, X, ArrowDown, Bot, Loader2 } from 'lucide-react';
 
 export default function AIChatWidget() {
@@ -38,7 +44,7 @@ export default function AIChatWidget() {
 
     const totalClients = clients.length;
     const totalInvoices = invoices.length;
-    
+
     // Earned
     const totalEarned = invoices
       .filter(i => i.status === 'Paid')
@@ -152,7 +158,7 @@ export default function AIChatWidget() {
     setInput('');
     setLoading(true);
 
-    const systemContext = `You are the AI assistant for FreelancerOS India. 
+    const systemContext = `You are the AI assistant for FreelanceOS India.
 You have access to this freelancer's real business data.
 
 CURRENT DATA SUMMARY:
@@ -171,8 +177,8 @@ CURRENT DATA SUMMARY:
 - Next recurring invoice due: ${richDataContext.nextRecurringDue}
 - Tax: TDS deducted this FY (est): ${formatINR(richDataContext.totalTDS)}
 
-Answer the user's question using this data. Be specific with numbers. 
-If they ask "which client owes me the most", look at the outstanding amounts and name them. 
+Answer the user's question using this data. Be specific with numbers.
+Be India-aware (GST, TDS, 44ADA, FIRA, advance tax).
 Keep answers under 80 words unless the question requires more detail.
 Respond in a helpful, direct tone. Use ₹ symbol for amounts.`;
 
@@ -182,28 +188,23 @@ Respond in a helpful, direct tone. Use ₹ symbol for amounts.`;
     }));
 
     try {
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-opus-4-20250514",
-          max_tokens: 400,
-          system: systemContext,
-          messages: [...chatHistory, { role: 'user', content: text }]
-        })
+      // Secure server proxy holds the API key and adds the required headers.
+      const data = await apiPost('/ai/chat', {
+        system: systemContext,
+        messages: [...chatHistory, { role: 'user', content: text }],
       });
-
-      if (!response.ok) throw new Error('API request failed');
-
-      const data = await response.json();
-      const textResponse = data.content?.map(b => b.text || '').join('') || '';
-
+      const textResponse = (data.text || '').trim() ||
+        "I couldn't generate a response just now. Try rephrasing your question.";
       const assistantMessage = { id: Date.now() + 1, role: 'assistant', content: textResponse };
       setMessages(prev => [...prev, assistantMessage]);
     } catch (error) {
-      const fallbackResponse = `I apologize, but I encountered an error communicating with the Claude API. Here is a quick snapshot from your data: Your current outstanding amount is **${formatINR(richDataContext.totalOutstanding)}** (with **${formatINR(richDataContext.overdueAmount)}** overdue). You have earned **${formatINR(richDataContext.thisMonthRevenue)}** this month against a target of **${formatINR(richDataContext.monthlyGoal)}**.`;
+      const notConfigured = error && error.status === 503;
+      const intro = notConfigured
+        ? `The AI assistant isn't configured yet — add ANTHROPIC_API_KEY on the API server to switch it on. Meanwhile, from your live data: `
+        : `I hit a connection issue reaching the assistant. From your live data: `;
+      const fallbackResponse = `${intro}outstanding is **${formatINR(richDataContext.totalOutstanding)}** (with **${formatINR(richDataContext.overdueAmount)}** overdue), and you've earned **${formatINR(richDataContext.thisMonthRevenue)}** this month against a **${formatINR(richDataContext.monthlyGoal)}** target.`;
       setMessages(prev => [...prev, { id: Date.now() + 1, role: 'assistant', content: fallbackResponse }]);
-      addToast('AI Chat Widget encountered connection issues.', 'warning');
+      addToast(notConfigured ? 'AI not configured — showing a data snapshot.' : 'AI connection issue — showing a data snapshot.', 'warning');
     } finally {
       setLoading(false);
     }
@@ -223,7 +224,7 @@ Respond in a helpful, direct tone. Use ₹ symbol for amounts.`;
       {/* Sliding Panel */}
       {isOpen && (
         <div className="fixed bottom-22 right-6 w-[360px] h-[520px] bg-[#111111]/95 backdrop-blur-md border border-[#2A2A2A] rounded-xl shadow-2xl flex flex-col overflow-hidden z-[9999] animate-scale-in no-print font-sans">
-          
+
           {/* Panel Header */}
           <div className="p-4 border-b border-dark-600/60 bg-dark-950/40 flex items-center justify-between">
             <div className="flex items-center gap-2">

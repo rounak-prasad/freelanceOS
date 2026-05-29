@@ -1,8 +1,11 @@
 import React, { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useData } from '../context/DataContext';
 import { formatINR, getCurrentFY } from '../utils/helpers';
 import StatCard from '../components/UI/StatCard';
-import { Calculator, Calendar, IndianRupee, FileText, AlertTriangle, Clock, TrendingUp, Shield, Plus, Trash2, MessageCircle } from 'lucide-react';
+// Centralised, versioned tax engine (fixes flat-18% GST on exports & flat-30% advance tax)
+import { computeIncomeTax, gstOnInvoice } from '../config/taxRules';
+import { Calculator, Calendar, IndianRupee, FileText, AlertTriangle, Clock, TrendingUp, Shield, Plus, Trash2, MessageCircle, Globe, ShieldCheck } from 'lucide-react';
 
 const TAX_SLABS = [
   { min: 0, max: 400000, rate: 0 },
@@ -14,16 +17,11 @@ const TAX_SLABS = [
   { min: 2400000, max: Infinity, rate: 30 },
 ];
 
-function calculateIncomeTax(income) {
-  let tax = 0;
-  for (const slab of TAX_SLABS) {
-    if (income <= slab.min) break;
-    const taxable = Math.min(income, slab.max) - slab.min;
-    tax += (taxable * slab.rate) / 100;
-  }
-  // 4% cess
-  const cess = tax * 0.04;
-  return { tax, cess, total: tax + cess };
+// Adapter over the shared engine so existing JSX (.tax / .cess / .total) keeps working,
+// while gaining 87A rebate, surcharge and marginal relief.
+function calcTax(income) {
+  const r = computeIncomeTax(income);
+  return { tax: r.afterRebate + r.surcharge, cess: r.cess, total: r.total };
 }
 
 function getQuarter(dateStr) {
@@ -38,6 +36,21 @@ function getQuarter(dateStr) {
 export default function TaxDashboard() {
   const { state, dispatch, addToast } = useData();
   const fy = getCurrentFY();
+
+  const settings = state.settings || {};
+  const hasLUT = settings.hasLUT ?? false;
+
+  // Detect export-of-service invoices (zero-rated under LUT). An invoice counts
+  // as an export if it's explicitly flagged, billed in a non-INR currency, or
+  // the client is outside India.
+  const isExportInvoice = (inv) => {
+    if (inv.isExport || inv.exportOfService || inv.export) return true;
+    if (inv.currency && inv.currency !== 'INR') return true;
+    const client = (state.clients || []).find(c => c.name === inv.clientName || c.id === inv.clientId);
+    return !!(client && client.country && String(client.country).toLowerCase() !== 'india');
+  };
+  const gstForInvoice = (inv, subtotal) =>
+    gstOnInvoice({ amount: subtotal, isExportOfService: isExportInvoice(inv), hasLUT, sameState: true });
 
   const tdsEntries = state.tdsEntries || [];
   const [showTdsForm, setShowTdsForm] = useState(false);
@@ -58,15 +71,20 @@ export default function TaxDashboard() {
   // Calculations
   const stats = useMemo(() => {
     const paidInvoices = state.invoices.filter(i => i.status === 'Paid');
-    const totalRevenue = paidInvoices.reduce((sum, inv) => {
+    let totalRevenue = 0;
+    let totalGST = 0;
+    let exportRevenue = 0;
+    paidInvoices.forEach(inv => {
       const subtotal = (inv.lineItems || []).reduce((s, item) => s + item.quantity * item.rate, 0);
-      return sum + subtotal;
-    }, 0);
-    const totalGST = totalRevenue * 0.18;
+      totalRevenue += subtotal;
+      const g = gstForInvoice(inv, subtotal);
+      totalGST += g.total;          // exports under LUT contribute 0 (correct)
+      if (g.zeroRated) exportRevenue += subtotal;
+    });
     const totalExpenses = state.expenses.reduce((s, e) => s + e.amount, 0);
     const netIncome = totalRevenue - totalExpenses;
-    return { totalRevenue, totalGST, totalExpenses, netIncome };
-  }, [state.invoices, state.expenses]);
+    return { totalRevenue, totalGST, totalExpenses, netIncome, exportRevenue };
+  }, [state.invoices, state.expenses, state.clients, hasLUT]);
 
   const quarterlyData = useMemo(() => {
     const quarters = { Q1: { revenue: 0, gst: 0, expenses: 0 }, Q2: { revenue: 0, gst: 0, expenses: 0 }, Q3: { revenue: 0, gst: 0, expenses: 0 }, Q4: { revenue: 0, gst: 0, expenses: 0 } };
@@ -74,19 +92,19 @@ export default function TaxDashboard() {
       const q = getQuarter(inv.paidDate || inv.date);
       const subtotal = (inv.lineItems || []).reduce((s, item) => s + item.quantity * item.rate, 0);
       quarters[q].revenue += subtotal;
-      quarters[q].gst += subtotal * 0.18;
+      quarters[q].gst += gstForInvoice(inv, subtotal).total;
     });
     state.expenses.forEach(exp => {
       const q = getQuarter(exp.date);
       quarters[q].expenses += exp.amount;
     });
     return quarters;
-  }, [state.invoices, state.expenses]);
+  }, [state.invoices, state.expenses, state.clients, hasLUT]);
 
   const taxCalc = useMemo(() => {
     const annualIncome = stats.netIncome;
-    const normal = calculateIncomeTax(annualIncome);
-    const presumptive = calculateIncomeTax(stats.totalRevenue * 0.5);
+    const normal = calcTax(annualIncome);
+    const presumptive = calcTax(stats.totalRevenue * 0.5);
     const installments = [
       { due: 'Jun 15', pct: 15, amount: normal.total * 0.15 },
       { due: 'Sep 15', pct: 45, amount: normal.total * 0.45 },
@@ -121,7 +139,7 @@ export default function TaxDashboard() {
   const advanceTaxInfo = useMemo(() => {
     const today = new Date();
     today.setHours(0,0,0,0);
-    
+
     // Installment dates for the current FY
     const installments = [
       { label: "1st Installment", dateStr: `${fy.start}-06-15`, pct: 15, qLabel: "Q1" },
@@ -143,11 +161,12 @@ export default function TaxDashboard() {
     const taxExpenses = state.expenses
       .filter(e => e.category === 'Tax' || e.category === 'Advance Tax' || e.description.toLowerCase().includes('advance tax'))
       .reduce((s, e) => s + e.amount, 0);
-      
+
     const alreadyPaid = tdsTotal + taxExpenses;
 
-    // Calculate due amount: (totalFYIncome * 0.3 * pct / 100) - alreadyPaid
-    const liability = totalFYIncome * 0.3; // 30% of total FY Income
+    // FIX: liability must come from the slab engine on NET taxable income,
+    // not a flat 30% of revenue (the old bug overstated tax massively).
+    const liability = computeIncomeTax(stats.netIncome).total;
     const installmentDue = liability * (upcoming.pct / 100);
     const dueAmount = Math.max(0, Math.round(installmentDue - alreadyPaid));
 
@@ -167,7 +186,7 @@ export default function TaxDashboard() {
       daysRemaining,
       waUrl
     };
-  }, [stats.totalRevenue, tdsEntries, state.expenses, fy]);
+  }, [stats.totalRevenue, stats.netIncome, tdsEntries, state.expenses, fy]);
 
   return (
     <div className="page-enter space-y-6">
@@ -177,12 +196,20 @@ export default function TaxDashboard() {
           <Calculator className="w-6 h-6 text-accent" /> Tax Dashboard
         </h1>
         <p className="text-sm text-dark-300 mt-0.5">{fy.label} • Financial overview & compliance tracker</p>
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+          <span className="badge bg-accent/10 text-accent flex items-center gap-1">
+            <Globe className="w-3 h-3" /> Exports {hasLUT ? 'zero-rated under LUT' : '— file LUT to zero-rate (IGST applies now)'}
+          </span>
+          <Link to="/guardrails" className="badge bg-dark-700 text-dark-200 hover:text-accent flex items-center gap-1">
+            <ShieldCheck className="w-3 h-3" /> Open Compliance Guard
+          </Link>
+        </div>
       </div>
 
       {/* Summary Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard icon={IndianRupee} label="Total Revenue" value={formatINR(stats.totalRevenue)} color="green" />
-        <StatCard icon={Calculator} label="GST Collected" value={formatINR(stats.totalGST)} color="amber" />
+        <StatCard icon={Calculator} label="GST Collected" value={formatINR(stats.totalGST)} color="amber" subValue={stats.exportRevenue ? `${formatINR(stats.exportRevenue)} exports zero-rated` : undefined} />
         <StatCard icon={TrendingUp} label="Total Expenses" value={formatINR(stats.totalExpenses)} color="red" />
         <StatCard icon={Shield} label="Net Taxable Income" value={formatINR(stats.netIncome)} color="blue" />
       </div>
