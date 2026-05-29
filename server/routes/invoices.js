@@ -7,19 +7,23 @@
  */
 import { Router } from 'express';
 import { getDb } from '../db/index.js';
-import { requireAuth, resolveWorkspace } from '../lib/authMiddleware.js';
+import { requireAuth, resolveWorkspace, requireRole } from '../lib/authMiddleware.js';
 import { asyncHandler, requireFields, bad, notFound } from '../lib/validate.js';
 import { writeAudit } from '../lib/audit.js';
+import { enforceLimit } from '../lib/entitlements.js';
 import * as repo from '../db/repos.js';
 
 const router = Router();
 router.use(requireAuth, resolveWorkspace);
 
+// Roles allowed to mutate business data (viewers are read-only).
+const CAN_WRITE = ['owner', 'admin', 'member'];
+
 router.get('/', asyncHandler((req, res) => {
   res.json(repo.listInvoices(getDb(), req.workspaceId));
 }));
 
-router.post('/', asyncHandler((req, res) => {
+router.post('/', requireRole(...CAN_WRITE), enforceLimit('invoicesPerMonth'), asyncHandler((req, res) => {
   const body = req.body || {};
   if (!Array.isArray(body.items) || body.items.length === 0) bad('At least one line item is required');
   const inv = repo.createInvoice(getDb(), req.workspaceId, body);
@@ -33,14 +37,14 @@ router.get('/:id', asyncHandler((req, res) => {
   res.json(inv);
 }));
 
-router.patch('/:id', asyncHandler((req, res) => {
+router.patch('/:id', requireRole(...CAN_WRITE), asyncHandler((req, res) => {
   const inv = repo.updateInvoice(getDb(), req.workspaceId, req.params.id, req.body || {});
   if (!inv) notFound('Invoice not found');
   writeAudit(getDb(), { workspaceId: req.workspaceId, userId: req.auth.userId, action: 'invoice.update', entityType: 'invoice', entityId: inv.id, ip: req.ip });
   res.json(inv);
 }));
 
-router.delete('/:id', asyncHandler((req, res) => {
+router.delete('/:id', requireRole(...CAN_WRITE), asyncHandler((req, res) => {
   const ok = repo.deleteInvoice(getDb(), req.workspaceId, req.params.id);
   if (!ok) notFound('Invoice not found');
   writeAudit(getDb(), { workspaceId: req.workspaceId, userId: req.auth.userId, action: 'invoice.delete', entityType: 'invoice', entityId: req.params.id, ip: req.ip });

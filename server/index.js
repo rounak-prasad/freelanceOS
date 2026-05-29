@@ -21,6 +21,8 @@ import authRouter from './routes/auth.js';
 import clientsRouter from './routes/clients.js';
 import invoicesRouter from './routes/invoices.js';
 import stateRouter from './routes/state.js';
+import membersRouter, { acceptRouter } from './routes/members.js';
+import billingRouter, { webhookRouter as billingWebhookRouter } from './routes/billing.js';
 
 import { getDb } from './db/index.js';
 import { HttpError } from './lib/validate.js';
@@ -62,11 +64,12 @@ app.get('/api/health', (_req, res) => {
   res.json({
     ok: true,
     service: 'freelanceos-api',
-    version: '2.0.0',
+    version: '2.1.0',
     db: getDb().engine,
     integrations: {
       ai: Boolean(process.env.ANTHROPIC_API_KEY),
       razorpay: Boolean(process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET),
+      billingWebhook: Boolean(process.env.RAZORPAY_WEBHOOK_SECRET),
     },
     time: new Date().toISOString(),
   });
@@ -77,6 +80,15 @@ app.use('/api/auth', rateLimit({ max: 30 }), authRouter);
 app.use('/api/clients', clientsRouter);
 app.use('/api/invoices', invoicesRouter);
 app.use('/api/state', stateRouter);
+
+// Teams (member management + invitations) and the invite-acceptance endpoint.
+app.use('/api/team', membersRouter);
+app.use('/api/invitations', acceptRouter);
+
+// Billing: public, signature-verified webhook mounted BEFORE the authed router
+// so it isn't gated by requireAuth.
+app.use('/api/billing/webhook', billingWebhookRouter);
+app.use('/api/billing', billingRouter);
 
 // Key-bearing integrations
 app.use('/api/ai', aiRouter);

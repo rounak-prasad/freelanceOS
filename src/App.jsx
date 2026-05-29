@@ -29,6 +29,10 @@ const Projects = lazy(() => import('./pages/Projects'));
 const Reports = lazy(() => import('./pages/Reports'));
 const Settings = lazy(() => import('./pages/Settings'));
 
+// Enterprise (cloud/auth mode): team management + subscription billing
+const Team = lazy(() => import('./pages/Team'));
+const Billing = lazy(() => import('./pages/Billing'));
+
 // New pages
 const ScopeCreep = lazy(() => import('./pages/ScopeCreep'));
 const Pipeline = lazy(() => import('./pages/Pipeline'));
@@ -103,6 +107,8 @@ export default function App() {
               <Route path="/linkedin" element={<LinkedInOutreach />} />
               <Route path="/time-tracker" element={<TimeTracker />} />
               <Route path="/projects" element={<Projects />} />
+              <Route path="/team" element={<Team />} />
+              <Route path="/billing" element={<Billing />} />
               <Route path="/settings" element={<Settings />} />
 
               {/* New Pages */}

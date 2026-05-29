@@ -21,6 +21,15 @@ infrastructure — GST, TDS, FIRC, 44ADA, UPI and cross-border.
 - 🔐 **Enterprise foundation (v2)** — real accounts (scrypt + JWT), a relational
   multi-tenant database (workspace-scoped, audit-logged), and tenant-scoped
   Clients/Invoices APIs with server-side GST. Zero-config local mode still works.
+- 👥 **Teams & RBAC (v2.1)** — invite teammates by email, owner/admin/member/viewer
+  roles enforced on every API, last-owner protection, and a Team management screen.
+- 💳 **Subscription billing (v2.1)** — Free / Pro / Team plans with live usage
+  limits and feature gating, a Razorpay Subscriptions adapter + signed webhook,
+  and a Billing & Plan screen. Runs in test mode until you add Razorpay keys.
+- 🔑 **Account security (v2.1)** — email verification, password reset, and
+  rotating refresh tokens (reuse-detection) on top of the existing auth.
+- 🧱 **Versioned DB migrations (v2.1)** — ordered, tracked, idempotent migrations
+  (`server/db/migrations/`) replace the single-schema boot; Postgres-ready.
 
 ## Tech
 
@@ -32,7 +41,8 @@ data layer and an Express API server for key-bearing integrations.
 ```bash
 npm install
 npm run dev          # app on localStorage + sample data, zero config
-npm run dev:all      # also starts the API server (AI / payments / cross-border)
+npm run dev:all      # also starts the API server (auth / teams / billing / AI / payments)
+npm test             # 133 assertions: tax, multi-tenancy, migrations, teams/RBAC, billing, auth
 ```
 
 See **[SETUP.md](./SETUP.md)** for architecture, environment variables and what

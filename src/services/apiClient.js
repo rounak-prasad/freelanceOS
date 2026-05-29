@@ -32,6 +32,20 @@ export async function apiPost(path, body) {
   );
 }
 
+export async function apiPatch(path, body) {
+  return parse(
+    await fetch(apiUrl(path), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify(body || {}),
+    })
+  );
+}
+
+export async function apiDelete(path) {
+  return parse(await fetch(apiUrl(path), { method: 'DELETE', headers: { ...authHeaders() } }));
+}
+
 /** Probe whether the API server is reachable (used to degrade gracefully). */
 export async function apiHealthy() {
   try {
@@ -43,4 +57,4 @@ export async function apiHealthy() {
 }
 
 export { apiUrl, APP_CONFIG };
-export default { apiGet, apiPost, apiHealthy, apiUrl };
+export default { apiGet, apiPost, apiPatch, apiDelete, apiHealthy, apiUrl };
