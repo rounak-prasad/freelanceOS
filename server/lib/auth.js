@@ -60,4 +60,15 @@ export function verifyJwt(token, secret) {
   return payload;
 }
 
-export default { hashPassword, verifyPassword, signJwt, verifyJwt };
+/** Hex SHA-256 — we persist only the HASH of single-use tokens (invites,
+ * email-verification, password-reset, refresh), never the raw value. */
+export function sha256(value) {
+  return crypto.createHash('sha256').update(String(value)).digest('hex');
+}
+
+/** Cryptographically-random URL-safe token (default 32 bytes → 43 chars). */
+export function randomToken(bytes = 32) {
+  return crypto.randomBytes(bytes).toString('base64url');
+}
+
+export default { hashPassword, verifyPassword, signJwt, verifyJwt, sha256, randomToken };

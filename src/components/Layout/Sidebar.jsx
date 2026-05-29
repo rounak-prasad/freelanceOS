@@ -8,7 +8,7 @@ import {
   FileSignature, ScrollText, Linkedin,
   Settings, ChevronLeft, ChevronRight, Menu, X, Zap,
   Activity, Workflow, ShieldAlert, Timer, Briefcase,
-  ShieldCheck, Globe, LineChart
+  ShieldCheck, Globe, LineChart, UserPlus, CreditCard
 } from 'lucide-react';
 
 const navSections = [
@@ -58,6 +58,14 @@ const navSections = [
     ]
   },
   {
+    title: 'WORKSPACE',
+    authOnly: true, // only shown in cloud/auth mode
+    items: [
+      { path: '/team', label: 'Team', icon: UserPlus },
+      { path: '/billing', label: 'Billing & Plan', icon: CreditCard },
+    ]
+  },
+  {
     items: [
       { path: '/settings', label: 'Settings', icon: Settings },
     ]
@@ -104,7 +112,7 @@ export default function Sidebar() {
 
       {/* Nav Links */}
       <nav className="flex-1 py-3 px-2 space-y-1 overflow-y-auto custom-scroll">
-        {navSections.map((section, sIdx) => (
+        {navSections.filter((section) => !section.authOnly || isAuthed).map((section, sIdx) => (
           <div key={sIdx}>
             {/* Section divider / title */}
             {section.title && (

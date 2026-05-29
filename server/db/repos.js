@@ -7,7 +7,7 @@
  * the function contracts do not change.
  */
 import crypto from 'node:crypto';
-import { boolInt, orNull } from '../lib/validate.js';
+import { boolInt, orNull, HttpError } from '../lib/validate.js';
 import { computeInvoice } from '../lib/invoiceService.js';
 
 /* ───────────────────────── users / workspaces ───────────────────────── */
@@ -224,4 +224,239 @@ export function setAppState(db, wsId, data) {
 export function clearAppState(db, wsId) {
   db.run('DELETE FROM app_state WHERE workspace_id = ?', [wsId]);
   return true;
+}
+
+/* ═══════════════════════ Phase 1a: teams / billing / auth ═══════════════════
+ * All functions below are tenant-scoped (workspace_id) where the data is a
+ * tenant's, and follow the same synchronous data-access contract as above.
+ * ──────────────────────────────────────────────────────────────────────── */
+
+/* ─────────────────────── memberships (team management) ───────────────────── */
+
+export const getMembership = (db, wsId, userId) =>
+  db.get('SELECT * FROM memberships WHERE workspace_id = ? AND user_id = ?', [wsId, userId]);
+
+export const listMembers = (db, wsId) =>
+  db.all(
+    `SELECT m.id, m.user_id, m.role, m.created_at, u.email, u.name, u.email_verified
+       FROM memberships m JOIN users u ON u.id = m.user_id
+      WHERE m.workspace_id = ? ORDER BY m.created_at`,
+    [wsId]
+  );
+
+export const countMembers = (db, wsId) =>
+  db.get('SELECT COUNT(*) AS n FROM memberships WHERE workspace_id = ?', [wsId])?.n || 0;
+
+export const countOwners = (db, wsId) =>
+  db.get("SELECT COUNT(*) AS n FROM memberships WHERE workspace_id = ? AND role = 'owner'", [wsId])?.n || 0;
+
+export function updateMemberRole(db, wsId, userId, role) {
+  const m = getMembership(db, wsId, userId);
+  if (!m) return null;
+  if (m.role === 'owner' && role !== 'owner' && countOwners(db, wsId) <= 1) {
+    throw new HttpError(400, 'Cannot change the role of the last owner — promote another owner first');
+  }
+  db.run('UPDATE memberships SET role = ? WHERE workspace_id = ? AND user_id = ?', [role, wsId, userId]);
+  return getMembership(db, wsId, userId);
+}
+
+export function removeMember(db, wsId, userId) {
+  const m = getMembership(db, wsId, userId);
+  if (!m) return false;
+  if (m.role === 'owner' && countOwners(db, wsId) <= 1) {
+    throw new HttpError(400, 'Cannot remove the last owner of a workspace');
+  }
+  const r = db.run('DELETE FROM memberships WHERE workspace_id = ? AND user_id = ?', [wsId, userId]);
+  return (r.changes || 0) > 0;
+}
+
+/* ────────────────────────────── invitations ─────────────────────────────── */
+
+export function createInvitation(db, wsId, { email, role = 'member', tokenHash, invitedBy = null, ttlHours = 168 }) {
+  const id = crypto.randomUUID();
+  const now = new Date();
+  const expires = new Date(now.getTime() + ttlHours * 3600 * 1000);
+  db.run(
+    `INSERT INTO invitations (id, workspace_id, email, role, token_hash, status, invited_by, created_at, expires_at)
+     VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
+    [id, wsId, String(email).toLowerCase(), role, tokenHash, orNull(invitedBy), now.toISOString(), expires.toISOString()]
+  );
+  return getInvitation(db, wsId, id);
+}
+
+export const getInvitation = (db, wsId, id) =>
+  db.get('SELECT * FROM invitations WHERE workspace_id = ? AND id = ?', [wsId, id]);
+export const listInvitations = (db, wsId) =>
+  db.all('SELECT * FROM invitations WHERE workspace_id = ? ORDER BY created_at DESC', [wsId]);
+export const countPendingInvitations = (db, wsId) =>
+  db.get("SELECT COUNT(*) AS n FROM invitations WHERE workspace_id = ? AND status = 'pending'", [wsId])?.n || 0;
+export const findPendingInvitation = (db, wsId, email) =>
+  db.get("SELECT * FROM invitations WHERE workspace_id = ? AND email = ? AND status = 'pending'", [wsId, String(email).toLowerCase()]);
+export const findInvitationByTokenHash = (db, tokenHash) =>
+  db.get('SELECT * FROM invitations WHERE token_hash = ?', [tokenHash]);
+
+export function revokeInvitation(db, wsId, id) {
+  const r = db.run(
+    "UPDATE invitations SET status = 'revoked' WHERE workspace_id = ? AND id = ? AND status = 'pending'",
+    [wsId, id]
+  );
+  return (r.changes || 0) > 0;
+}
+
+/** Accept an invite for an authenticated user. Creates the membership and marks
+ *  the invite accepted, atomically. Throws HttpError on any invalid state. */
+export function acceptInvitation(db, { tokenHash, userId, userEmail }) {
+  const inv = findInvitationByTokenHash(db, tokenHash);
+  if (!inv) throw new HttpError(404, 'Invitation not found');
+  if (inv.status !== 'pending') throw new HttpError(409, 'This invitation has already been used or revoked');
+  if (new Date(inv.expires_at) < new Date()) {
+    db.run("UPDATE invitations SET status = 'revoked' WHERE id = ?", [inv.id]);
+    throw new HttpError(410, 'This invitation has expired');
+  }
+  if (userEmail && String(userEmail).toLowerCase() !== inv.email) {
+    throw new HttpError(403, 'This invitation was sent to a different email address');
+  }
+  const existing = getMembership(db, inv.workspace_id, userId);
+  const now = new Date().toISOString();
+  db.tx((tx) => {
+    if (!existing) {
+      insertMembership(tx, { id: crypto.randomUUID(), workspace_id: inv.workspace_id, user_id: userId, role: inv.role, created_at: now });
+    }
+    tx.run("UPDATE invitations SET status = 'accepted', accepted_at = ? WHERE id = ?", [now, inv.id]);
+  });
+  return { workspaceId: inv.workspace_id, role: inv.role, alreadyMember: !!existing };
+}
+
+/* ───────────────────────────── subscriptions ────────────────────────────── */
+
+const FREE_SUBSCRIPTION = (wsId) => ({
+  workspace_id: wsId, plan: 'free', status: 'active', provider: null,
+  provider_subscription_id: null, provider_customer_id: null, seats: 1, current_period_end: null,
+});
+
+/** Absence of a row == the Free plan (we never force a write on read). */
+export function getSubscription(db, wsId) {
+  return db.get('SELECT * FROM subscriptions WHERE workspace_id = ?', [wsId]) || FREE_SUBSCRIPTION(wsId);
+}
+
+export function upsertSubscription(db, wsId, patch = {}) {
+  const now = new Date().toISOString();
+  const cur = db.get('SELECT * FROM subscriptions WHERE workspace_id = ?', [wsId]);
+  const next = { ...(cur || FREE_SUBSCRIPTION(wsId)), ...patch };
+  if (cur) {
+    db.run(
+      `UPDATE subscriptions SET plan=?, status=?, provider=?, provider_subscription_id=?,
+         provider_customer_id=?, seats=?, current_period_end=?, updated_at=? WHERE workspace_id=?`,
+      [next.plan, next.status, orNull(next.provider), orNull(next.provider_subscription_id),
+       orNull(next.provider_customer_id), next.seats ?? 1, orNull(next.current_period_end), now, wsId]
+    );
+  } else {
+    db.run(
+      `INSERT INTO subscriptions (workspace_id, plan, status, provider, provider_subscription_id,
+         provider_customer_id, seats, current_period_end, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [wsId, next.plan, next.status, orNull(next.provider), orNull(next.provider_subscription_id),
+       orNull(next.provider_customer_id), next.seats ?? 1, orNull(next.current_period_end), now, now]
+    );
+  }
+  return db.get('SELECT * FROM subscriptions WHERE workspace_id = ?', [wsId]);
+}
+
+export const findSubscriptionByProviderId = (db, providerSubId) =>
+  db.get('SELECT * FROM subscriptions WHERE provider_subscription_id = ?', [providerSubId]);
+
+export function insertBillingEvent(db, { workspaceId = null, provider = null, eventType, payload = null }) {
+  db.run(
+    'INSERT INTO billing_events (id, workspace_id, provider, event_type, payload, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+    [crypto.randomUUID(), orNull(workspaceId), orNull(provider), String(eventType), payload ? JSON.stringify(payload) : null, new Date().toISOString()]
+  );
+}
+
+/* ───────────────────── usage counters (for plan limits) ──────────────────── */
+
+export const countClients = (db, wsId) =>
+  db.get('SELECT COUNT(*) AS n FROM clients WHERE workspace_id = ?', [wsId])?.n || 0;
+export const countInvoicesSince = (db, wsId, isoDate) =>
+  db.get('SELECT COUNT(*) AS n FROM invoices WHERE workspace_id = ? AND created_at >= ?', [wsId, isoDate])?.n || 0;
+
+/* ─────────────── email tokens (verification + password reset) ────────────── */
+
+export function createEmailToken(db, { userId, kind, tokenHash, ttlHours = 24 }) {
+  const id = crypto.randomUUID();
+  const now = new Date();
+  const expires = new Date(now.getTime() + ttlHours * 3600 * 1000);
+  db.run(
+    'INSERT INTO email_tokens (id, user_id, kind, token_hash, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)',
+    [id, userId, kind, tokenHash, now.toISOString(), expires.toISOString()]
+  );
+  return id;
+}
+
+/** Single-use consume: returns the row (incl. user_id) iff valid, else null. */
+export function consumeEmailToken(db, { tokenHash, kind }) {
+  const row = db.get('SELECT * FROM email_tokens WHERE token_hash = ? AND kind = ?', [tokenHash, kind]);
+  if (!row || row.consumed_at) return null;
+  if (new Date(row.expires_at) < new Date()) return null;
+  db.run('UPDATE email_tokens SET consumed_at = ? WHERE id = ?', [new Date().toISOString(), row.id]);
+  return row;
+}
+
+/* ──────────────────────── refresh tokens (rotation) ─────────────────────── */
+
+export function createRefreshToken(db, { userId, tokenHash, ttlDays = 30 }) {
+  const id = crypto.randomUUID();
+  const now = new Date();
+  const expires = new Date(now.getTime() + ttlDays * 86400 * 1000);
+  db.run(
+    'INSERT INTO refresh_tokens (id, user_id, token_hash, created_at, expires_at) VALUES (?, ?, ?, ?, ?)',
+    [id, userId, tokenHash, now.toISOString(), expires.toISOString()]
+  );
+  return id;
+}
+
+export const findRefreshToken = (db, tokenHash) =>
+  db.get('SELECT * FROM refresh_tokens WHERE token_hash = ?', [tokenHash]);
+
+export function revokeRefreshToken(db, tokenHash) {
+  const r = db.run('UPDATE refresh_tokens SET revoked_at = ? WHERE token_hash = ? AND revoked_at IS NULL',
+    [new Date().toISOString(), tokenHash]);
+  return (r.changes || 0) > 0;
+}
+
+/** Revoke every active refresh token for a user (e.g. after a password reset). */
+export function revokeAllRefreshTokensForUser(db, userId) {
+  const r = db.run('UPDATE refresh_tokens SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL',
+    [new Date().toISOString(), userId]);
+  return r.changes || 0;
+}
+
+/** Validate + rotate a refresh token. On success revokes the old one, links it
+ *  to its replacement (theft-detection), and returns { userId, newId }. */
+export function rotateRefreshToken(db, { oldHash, newHash, ttlDays = 30 }) {
+  const row = findRefreshToken(db, oldHash);
+  if (!row) return { error: 'not_found' };
+  if (row.revoked_at) return { error: 'revoked', userId: row.user_id };
+  if (new Date(row.expires_at) < new Date()) return { error: 'expired', userId: row.user_id };
+  let newId;
+  db.tx((tx) => {
+    newId = crypto.randomUUID();
+    const now = new Date();
+    const expires = new Date(now.getTime() + ttlDays * 86400 * 1000);
+    tx.run('INSERT INTO refresh_tokens (id, user_id, token_hash, created_at, expires_at) VALUES (?, ?, ?, ?, ?)',
+      [newId, row.user_id, newHash, now.toISOString(), expires.toISOString()]);
+    tx.run('UPDATE refresh_tokens SET revoked_at = ?, replaced_by = ? WHERE id = ?',
+      [now.toISOString(), newId, row.id]);
+  });
+  return { userId: row.user_id, newId };
+}
+
+/* ───────────────────────────── user mutations ───────────────────────────── */
+
+export function setEmailVerified(db, userId, val = 1) {
+  db.run('UPDATE users SET email_verified = ?, updated_at = ? WHERE id = ?',
+    [boolInt(val), new Date().toISOString(), userId]);
+}
+export function updateUserPassword(db, userId, passwordHash) {
+  db.run('UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?',
+    [passwordHash, new Date().toISOString(), userId]);
 }

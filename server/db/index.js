@@ -10,12 +10,12 @@
  * All callers use parameterized SQL ONLY — never string interpolation.
  */
 import { DatabaseSync } from 'node:sqlite';
-import { readFileSync, mkdirSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { runMigrations } from './migrate.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const SCHEMA_PATH = path.join(__dirname, 'schema.sql');
 
 let _db = null;
 
@@ -81,9 +81,9 @@ export function getDb() {
   return _db;
 }
 
-/** Apply the schema (idempotent — every statement is CREATE … IF NOT EXISTS). */
+/** Apply all pending migrations (idempotent; tracked in schema_migrations). */
 export function initSchema(db = getDb()) {
-  db.exec(readFileSync(SCHEMA_PATH, 'utf8'));
+  runMigrations(db);
   return db;
 }
 

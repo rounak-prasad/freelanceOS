@@ -1,7 +1,7 @@
 {
   "name": "freelanceos",
   "private": true,
-  "version": "2.0.0",
+  "version": "2.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "server": "node server/index.js",
     "dev:all": "concurrently -k -n api,web -c green,cyan \"npm run server\" \"npm run dev\"",
-    "test": "node tests/logic.test.mjs && node tests/foundation.test.mjs",
+    "test": "node tests/logic.test.mjs && node tests/foundation.test.mjs && node tests/migrations.test.mjs && node tests/teams.test.mjs && node tests/billing.test.mjs && node tests/auth_hardening.test.mjs",
     "test:foundation": "node tests/foundation.test.mjs"
   },
   "dependencies": {

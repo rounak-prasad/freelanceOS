@@ -39,7 +39,9 @@ The Vite dev server proxies `/api/*` to the API automatically (see
 | `VITE_API_BASE` | API origin if not same-domain (e.g. `http://localhost:8787`) |
 | `ANTHROPIC_API_KEY` | Enables the AI assistant (server proxy) |
 | `RAZORPAY_KEY_ID` / `RAZORPAY_KEY_SECRET` | Razorpay Payment Links & Orders |
-| `RAZORPAY_WEBHOOK_SECRET` | Verifies the paid-status webhook |
+| `RAZORPAY_WEBHOOK_SECRET` | Verifies the payment + subscription webhooks |
+| `RAZORPAY_PLAN_PRO` / `RAZORPAY_PLAN_TEAM` | Razorpay subscription plan ids (billing tiers) |
+| `APP_BASE_URL` | Base URL for invite / verify / password-reset email links |
 | `SKYDO_API_KEY` / `WISE_API_TOKEN` | Optional cross-border / auto-FIRA partners |
 
 See `.env.example` for the full list.
@@ -120,9 +122,10 @@ real session and each workspace's data lives in the database.
 
 ### Dev database
 
-Dev/test uses Node 24's built-in `node:sqlite` — **zero install**. The schema
-auto-applies on boot (`server/db/schema.sql`, all `CREATE … IF NOT EXISTS`).
-The file lives at `server/.data/freelanceos.sqlite` (override with `SQLITE_PATH`).
+Dev/test uses Node's built-in `node:sqlite` — **zero install**. Ordered, tracked
+migrations in `server/db/migrations/` auto-apply on boot (idempotent; each runs
+once in a transaction, recorded in `schema_migrations`). The file lives at
+`server/.data/freelanceos.sqlite` (override with `SQLITE_PATH`).
 
 ### Moving to Postgres (production)
 
@@ -130,16 +133,63 @@ The schema is deliberately dialect-neutral (UUID string ids, ISO-8601 text
 timestamps, integer money). A Postgres adapter is included in
 `server/db/index.js` (`createPostgresDb`) and translates `?` → `$n`. Because it
 is async, the swap is: (1) set `DATABASE_URL`, (2) make the `repos.js` functions
-and their callers `await` the db calls, (3) run `schema.sql` (INTEGER→BIGINT for
-`*_minor`, REAL→DOUBLE PRECISION). The route/repo contracts do not change.
+and their callers `await` the db calls, (3) run the migrations in
+`server/db/migrations/` (INTEGER→BIGINT for `*_minor`, REAL→DOUBLE PRECISION).
+The route/repo contracts do not change.
+
+> **Status:** the synchronous→async repo cutover that activates this Postgres
+> adapter is the next foundation task (**Phase 1b**) and ships as its own focused
+> PR. It is a pure refactor whose only payoff — live Postgres — cannot be
+> validated in a sandbox without a Postgres instance, so it is intentionally kept
+> out of the feature PRs to protect the green build. Dev/test runs on SQLite.
+
+## v2.1 — Teams, billing & account security
+
+Built on the v2 foundation (everything tenant-scoped + audit-logged; zero-config
+local mode preserved):
+
+**Versioned migrations** (`server/db/migrate.js`, `server/db/migrations/`)
+- The single-`schema.sql` boot is replaced by ordered, tracked migrations
+  recorded in `schema_migrations`. Each runs once, in a transaction, idempotently
+  — safe on a fresh DB and on one created by the old boot path.
+
+**Teams & RBAC** (`server/routes/members.js`)
+- Invite teammates by email (single-use, hashed token, 7-day expiry); accept via
+  `POST /api/invitations/accept`; manage at `/api/team/*`.
+- Roles `owner | admin | member | viewer`, enforced by `requireRole` on every
+  mutating route (`viewer` is read-only). The last owner can't be removed/demoted.
+- Seats count against the plan; invites beyond the limit are blocked (402).
+
+**Subscription billing** (`server/routes/billing.js`, `server/lib/plans.js`,
+`server/lib/entitlements.js`, `server/lib/billingWebhook.js`)
+- Plans Free / Pro / Team with per-plan limits (clients, invoices/month, seats)
+  and feature flags, enforced live against the DB (`enforceLimit`,
+  `requireFeature`) — never client-trusted.
+- `GET /api/billing` → plan + usage + catalog; `POST /checkout` starts a Razorpay
+  subscription (or TEST MODE without keys); `POST /cancel`; and a
+  signature-verified `POST /api/billing/webhook` that drives status changes.
+- A lapsed plan (halted/cancelled) falls back to Free entitlements: you keep your
+  data, only paid capacity is gated.
+
+**Account security** (`server/routes/auth.js`, `server/lib/mailer.js`)
+- Email verification, password reset (1-hour token), and rotating refresh tokens
+  (single-use; reusing a rotated token revokes the whole family). Tokens are
+  stored only as SHA-256 hashes. Email uses a pluggable mailer (console transport
+  by default — set a real provider via `setTransport`).
+
+**Frontend** — `Team` and `Billing & Plan` pages (shown in the sidebar in cloud
+mode) for member/role management and plan/usage/upgrade.
 
 ## Tests
 
 ```bash
-npm test                       # runs both suites below
-node tests/logic.test.mjs      # 34 assertions: tax, GST, advance tax, guardrails, FX, cash-flow
-node tests/foundation.test.mjs # 26 assertions: password hashing, JWT, multi-tenant
-                               # isolation, per-tenant state, server-side GST, auth guard
+npm test   # 133 assertions across 6 suites:
+#   logic.test.mjs           34 — tax, GST, advance tax, guardrails, FX, cash-flow
+#   foundation.test.mjs      26 — password hashing, JWT, multi-tenant isolation, server-side GST
+#   migrations.test.mjs      15 — migration runner idempotency + schema shape
+#   teams.test.mjs           18 — invitations lifecycle, RBAC, last-owner protection, isolation
+#   billing.test.mjs         22 — plan entitlements, limit math, webhook signature + state
+#   auth_hardening.test.mjs  18 — email/reset tokens, refresh-token rotation & revocation
 ```
 
 ## Disclaimer

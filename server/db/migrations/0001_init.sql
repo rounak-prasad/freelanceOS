@@ -1,13 +1,17 @@
 -- ─────────────────────────────────────────────────────────────────────────
--- FreelanceOS relational schema — v2 "enterprise foundation".
+-- 0001_init — FreelanceOS relational schema (v2 "enterprise foundation").
 --
--- Dialect: SQLite (Node 24 built-in `node:sqlite`) for dev/test — zero install.
+-- This is the baseline migration: it reproduces the original schema exactly so
+-- existing databases (which already have these tables from the pre-migrations
+-- boot path) are a no-op, while fresh databases get the full foundation.
+--
+-- Dialect: SQLite (Node built-in `node:sqlite`) for dev/test — zero install.
 -- Production target: PostgreSQL. The schema is deliberately dialect-neutral:
 --   • IDs are UUID strings (crypto.randomUUID) — no SERIAL/AUTOINCREMENT drift.
 --   • Timestamps are ISO-8601 TEXT — portable across engines.
 --   • Money is stored as INTEGER MINOR UNITS (paise) — no floating-point error.
--- To run on Postgres: INTEGER→BIGINT for *_minor, REAL→DOUBLE PRECISION,
--- and the `?` placeholders are translated to `$n` in db/index.js. See SETUP.md.
+-- To run on Postgres: INTEGER→BIGINT for *_minor, REAL→DOUBLE PRECISION, and
+-- the `?` placeholders are translated to `$n` in db/index.js. See SETUP.md.
 -- ─────────────────────────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS users (
