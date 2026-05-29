@@ -21,6 +21,10 @@ export const APP_CONFIG = {
   // Default USD→INR used by the cross-border calculator until a live rate is wired
   defaultUsdInr: Number(env.VITE_DEFAULT_USDINR || 86),
   currency: 'INR',
+  // Auth is required when using the http/DB backend, or when explicitly enabled
+  // via VITE_REQUIRE_AUTH. Local mode (default) bypasses auth so the product
+  // still runs with zero setup on localStorage + sample data.
+  requireAuth: (env.VITE_REQUIRE_AUTH === 'true') || ((env.VITE_DATA_BACKEND || 'local') === 'http'),
 };
 
 export const apiUrl = (path) => {

@@ -16,6 +16,7 @@
  */
 
 import APP_CONFIG, { apiUrl } from '../config/appConfig.js';
+import { authHeaders } from './authClient.js';
 
 export const STORAGE_KEY = 'freelanceos_data';
 
@@ -59,7 +60,7 @@ const HttpAdapter = {
   },
   async hydrate() {
     try {
-      const res = await fetch(apiUrl('/state'));
+      const res = await fetch(apiUrl('/state'), { headers: { ...authHeaders() } });
       if (!res.ok) throw new Error('state fetch ' + res.status);
       const data = await res.json();
       LocalStorageAdapter.save(data);
@@ -75,7 +76,7 @@ const HttpAdapter = {
     saveTimer = setTimeout(() => {
       fetch(apiUrl('/state'), {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify(state),
       }).catch((e) => console.warn('[persistence] http save failed (cached locally):', e));
     }, 800); // debounce network writes
@@ -83,7 +84,7 @@ const HttpAdapter = {
   },
   clear() {
     LocalStorageAdapter.clear();
-    fetch(apiUrl('/state'), { method: 'DELETE' }).catch(() => {});
+    fetch(apiUrl('/state'), { method: 'DELETE', headers: { ...authHeaders() } }).catch(() => {});
   },
 };
 

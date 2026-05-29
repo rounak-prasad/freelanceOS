@@ -4,6 +4,7 @@
  * error handling so feature modules stay clean.
  */
 import APP_CONFIG, { apiUrl } from '../config/appConfig.js';
+import { authHeaders } from './authClient.js';
 
 async function parse(res) {
   const data = await res.json().catch(() => ({}));
@@ -18,14 +19,14 @@ async function parse(res) {
 }
 
 export async function apiGet(path) {
-  return parse(await fetch(apiUrl(path)));
+  return parse(await fetch(apiUrl(path), { headers: { ...authHeaders() } }));
 }
 
 export async function apiPost(path, body) {
   return parse(
     await fetch(apiUrl(path), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify(body || {}),
     })
   );

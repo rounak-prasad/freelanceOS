@@ -1,15 +1,12 @@
 /**
  * FreelanceOS API server.
  *
- * Holds the integration code that CANNOT run in the browser because it needs
- * secret keys: the AI assistant proxy (Anthropic), payments (Razorpay) and
- * cross-border helpers. The Vite dev server proxies /api/* here (see
- * vite.config.js). In production, deploy this behind the same domain or set
- * VITE_API_BASE in the frontend.
+ * v2 "enterprise foundation": real authentication, a relational multi-tenant
+ * database, and tenant-scoped Clients/Invoices APIs — alongside the original
+ * key-bearing integrations (AI proxy, Razorpay payments, cross-border helpers).
  *
- * Every route degrades gracefully: with no keys configured it returns a clear
- * 503 so the UI can fall back (e.g. to UPI links or the canned AI reply)
- * instead of crashing.
+ * Dev/test runs on Node's built-in SQLite (zero install). Set DATABASE_URL to a
+ * Postgres connection string for production (see server/db/index.js + SETUP.md).
  *
  * Run:  npm run server   (or  npm run dev:all  to run API + Vite together)
  */
@@ -20,11 +17,23 @@ import dotenv from 'dotenv';
 import aiRouter from './routes/ai.js';
 import paymentsRouter from './routes/payments.js';
 import crossborderRouter from './routes/crossborder.js';
-import { stateStore } from './lib/store.js';
+import authRouter from './routes/auth.js';
+import clientsRouter from './routes/clients.js';
+import invoicesRouter from './routes/invoices.js';
+import stateRouter from './routes/state.js';
+
+import { getDb } from './db/index.js';
+import { HttpError } from './lib/validate.js';
+import { jwtSecret } from './lib/authMiddleware.js';
 
 dotenv.config();
 
+// Open + migrate the database on boot (idempotent).
+getDb();
+
 const app = express();
+app.set('trust proxy', 1); // so req.ip is correct behind a proxy/load balancer
+
 // Razorpay webhook needs the raw body for signature verification — capture it.
 app.use(express.json({
   verify: (req, _res, buf) => { req.rawBody = buf; },
@@ -32,10 +41,29 @@ app.use(express.json({
 }));
 app.use(cors({ origin: process.env.CORS_ORIGIN || true }));
 
+/* ---- Minimal in-memory rate limiter for auth (swap for Redis in prod) ---- */
+const rl = new Map();
+function rateLimit({ windowMs = 5 * 60 * 1000, max = 30 } = {}) {
+  return (req, res, next) => {
+    const key = `${req.ip}:${req.path}`;
+    const now = Date.now();
+    const hit = rl.get(key) || { count: 0, reset: now + windowMs };
+    if (now > hit.reset) { hit.count = 0; hit.reset = now + windowMs; }
+    hit.count += 1;
+    rl.set(key, hit);
+    if (hit.count > max) {
+      return res.status(429).json({ error: 'Too many requests — please slow down and try again shortly.' });
+    }
+    next();
+  };
+}
+
 app.get('/api/health', (_req, res) => {
   res.json({
     ok: true,
     service: 'freelanceos-api',
+    version: '2.0.0',
+    db: getDb().engine,
     integrations: {
       ai: Boolean(process.env.ANTHROPIC_API_KEY),
       razorpay: Boolean(process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET),
@@ -44,34 +72,38 @@ app.get('/api/health', (_req, res) => {
   });
 });
 
-// Optional persistence backend for the HTTP data adapter (VITE_DATA_BACKEND=http).
-// File-backed by default; swap stateStore for a real DB in production.
-app.get('/api/state', async (req, res) => {
-  res.json((await stateStore.get(req.query.userId || 'default')) || {});
-});
-app.put('/api/state', async (req, res) => {
-  await stateStore.set(req.query.userId || 'default', req.body);
-  res.json({ ok: true });
-});
-app.delete('/api/state', async (req, res) => {
-  await stateStore.clear(req.query.userId || 'default');
-  res.json({ ok: true });
-});
+// Auth + tenant-scoped business APIs
+app.use('/api/auth', rateLimit({ max: 30 }), authRouter);
+app.use('/api/clients', clientsRouter);
+app.use('/api/invoices', invoicesRouter);
+app.use('/api/state', stateRouter);
 
+// Key-bearing integrations
 app.use('/api/ai', aiRouter);
 app.use('/api/payments', paymentsRouter);
 app.use('/api/crossborder', crossborderRouter);
 
+// Central error handler — maps HttpError.status, hides internals on 500.
 app.use((err, _req, res, _next) => {
+  if (err instanceof HttpError) {
+    return res.status(err.status).json({ error: err.message, ...(err.details ? { details: err.details } : {}) });
+  }
   console.error('[api] error:', err);
-  res.status(500).json({ error: err.message || 'Internal error' });
+  res.status(500).json({ error: 'Internal server error' });
 });
 
 const PORT = process.env.PORT || 8787;
-app.listen(PORT, () => {
-  console.log(`FreelanceOS API on http://localhost:${PORT}`);
-  if (!process.env.ANTHROPIC_API_KEY) console.log('  • AI: set ANTHROPIC_API_KEY to enable the assistant');
-  if (!process.env.RAZORPAY_KEY_ID) console.log('  • Payments: set RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET to enable Razorpay');
-});
+
+// Only listen when run directly (not when imported by tests).
+if (process.env.NODE_ENV !== 'test') {
+  app.listen(PORT, () => {
+    console.log(`FreelanceOS API on http://localhost:${PORT}  (db: ${getDb().engine})`);
+    if (jwtSecret() === 'dev-insecure-secret-change-me') {
+      console.log('  ⚠  JWT_SECRET is unset — using an insecure dev secret. Set JWT_SECRET in production.');
+    }
+    if (!process.env.ANTHROPIC_API_KEY) console.log('  • AI: set ANTHROPIC_API_KEY to enable the assistant');
+    if (!process.env.RAZORPAY_KEY_ID) console.log('  • Payments: set RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET to enable Razorpay');
+  });
+}
 
 export default app;
