@@ -9,7 +9,7 @@ import {
   defaultSettings,
 } from '../utils/sampleData';
 // Backend-ready persistence layer (localStorage today, HTTP API when configured)
-import { loadState, saveState, clearState, backendMode } from '../services/persistence';
+import { loadState, saveState, clearState, backendMode, hydrateState } from '../services/persistence';
 
 const DataContext = createContext(null);
 
@@ -282,11 +282,26 @@ export function DataProvider({ children }) {
   const [state, dispatch] = useReducer(dataReducer, null, getInitialState);
   const [toasts, setToasts] = useState([]);
 
-  // Persist on every change via the data-access layer (localStorage now,
-  // HTTP API when VITE_DATA_BACKEND=http — DataContext stays agnostic).
+  // In http/DB mode, hydrate this workspace's state from the server BEFORE we
+  // start persisting, so a fresh device never overwrites server data with an
+  // empty local cache. Local mode is considered hydrated immediately.
+  const [hydrated, setHydrated] = useState(backendMode !== 'http');
   useEffect(() => {
-    saveState(state);
-  }, [state]);
+    if (backendMode !== 'http') return;
+    let active = true;
+    hydrateState()
+      .then((data) => {
+        if (active && data && Object.keys(data).length) dispatch({ type: 'IMPORT_DATA', payload: data });
+      })
+      .finally(() => { if (active) setHydrated(true); });
+    return () => { active = false; };
+  }, []);
+
+  // Persist on every change once hydrated (localStorage now, HTTP API when
+  // VITE_DATA_BACKEND=http — DataContext stays agnostic about where data lives).
+  useEffect(() => {
+    if (hydrated) saveState(state);
+  }, [state, hydrated]);
 
   // Toast notification system
   const addToast = useCallback((message, type = 'success') => {

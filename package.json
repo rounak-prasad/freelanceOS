@@ -1,7 +1,7 @@
 {
   "name": "freelanceos",
   "private": true,
-  "version": "1.1.0",
+  "version": "2.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "server": "node server/index.js",
     "dev:all": "concurrently -k -n api,web -c green,cyan \"npm run server\" \"npm run dev\"",
-    "test": "node tests/logic.test.mjs"
+    "test": "node tests/logic.test.mjs && node tests/foundation.test.mjs",
+    "test:foundation": "node tests/foundation.test.mjs"
   },
   "dependencies": {
     "@hello-pangea/dnd": "^17.0.0",
@@ -25,6 +26,9 @@
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.28.0",
     "recharts": "^2.15.0"
+  },
+  "optionalDependencies": {
+    "pg": "^8.13.1"
   },
   "devDependencies": {
     "@types/react": "^18.3.12",

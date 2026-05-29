@@ -85,10 +85,61 @@ Persistence is now behind an adapter seam (`src/services/persistence.js`):
 - **Razorpay** payment links / orders / webhook (`server/routes/payments.js`),
   plus a no-key **UPI deep-link / QR** helper on every invoice.
 
+## v2 — Enterprise foundation (auth + multi-tenant database)
+
+The prototype stored everything as a single JSON blob (localStorage, or one
+file per user) with no accounts. v2 adds the foundation an enterprise product
+needs, **without breaking the zero-config local experience**:
+
+- **Authentication** — email/password with `scrypt` hashing and HS256 JWT
+  sessions (`server/lib/auth.js`). No new dependencies; swap in
+  `argon2`/`jsonwebtoken` later without touching call sites.
+- **Relational, multi-tenant database** (`server/db/`) — real tables
+  (`users`, `workspaces`, `memberships`, `clients`, `invoices`,
+  `invoice_items`, `app_state`, `audit_log`). The **workspace** is the tenant
+  boundary; every business query is scoped to `workspace_id` in the repo layer
+  (`server/db/repos.js`), so one tenant can never read another's data.
+- **Tenant-scoped REST APIs** — `/api/auth`, `/api/clients`, `/api/invoices`
+  behind `requireAuth` + `resolveWorkspace`. GST is computed **server-side**
+  via the shared tax engine (never trusted from the client).
+- **Audit log + RBAC + auth rate-limiting** — the enterprise basics.
+- Money is stored in **integer minor units (paise)** to avoid float drift.
+
+### Enable it
+
+```bash
+cp .env.example .env
+# set JWT_SECRET to a long random string
+echo "VITE_DATA_BACKEND=http" >> .env   # turns on the DB backend + login
+npm run dev:all
+```
+
+In local mode (default) auth is bypassed and the app runs exactly as before.
+When `VITE_DATA_BACKEND=http` (or `VITE_REQUIRE_AUTH=true`), the app gates on a
+real session and each workspace's data lives in the database.
+
+### Dev database
+
+Dev/test uses Node 24's built-in `node:sqlite` — **zero install**. The schema
+auto-applies on boot (`server/db/schema.sql`, all `CREATE … IF NOT EXISTS`).
+The file lives at `server/.data/freelanceos.sqlite` (override with `SQLITE_PATH`).
+
+### Moving to Postgres (production)
+
+The schema is deliberately dialect-neutral (UUID string ids, ISO-8601 text
+timestamps, integer money). A Postgres adapter is included in
+`server/db/index.js` (`createPostgresDb`) and translates `?` → `$n`. Because it
+is async, the swap is: (1) set `DATABASE_URL`, (2) make the `repos.js` functions
+and their callers `await` the db calls, (3) run `schema.sql` (INTEGER→BIGINT for
+`*_minor`, REAL→DOUBLE PRECISION). The route/repo contracts do not change.
+
 ## Tests
 
 ```bash
-node tests/logic.test.mjs   # 34 assertions over tax, GST, advance tax, guardrails, FX, cash-flow
+npm test                       # runs both suites below
+node tests/logic.test.mjs      # 34 assertions: tax, GST, advance tax, guardrails, FX, cash-flow
+node tests/foundation.test.mjs # 26 assertions: password hashing, JWT, multi-tenant
+                               # isolation, per-tenant state, server-side GST, auth guard
 ```
 
 ## Disclaimer

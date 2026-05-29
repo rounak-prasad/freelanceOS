@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
+import { useAuth } from '../../context/AuthContext';
 import {
   LayoutDashboard, Users, BookOpen, Flag, Target,
   FileText, History, AlertTriangle, Wallet, Calculator,
@@ -84,6 +85,7 @@ export default function Sidebar() {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const location = useLocation();
+  const { user, isAuthed, logout } = useAuth();
 
   const sidebarContent = (
     <div className="flex flex-col h-full">
@@ -145,6 +147,23 @@ export default function Sidebar() {
           </div>
         ))}
       </nav>
+
+      {/* Account / sign out (auth mode only) */}
+      {isAuthed && (
+        <div className="border-t border-dark-600/50 p-2">
+          <div className="flex items-center gap-2 px-2 py-1.5">
+            <div className="w-7 h-7 rounded-full bg-accent/15 text-accent flex items-center justify-center text-xs font-semibold flex-shrink-0">
+              {(user?.name || user?.email || '?').slice(0, 1).toUpperCase()}
+            </div>
+            {!collapsed && (
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-medium text-dark-100 truncate">{user?.name || user?.email}</p>
+                <button onClick={logout} className="text-[11px] text-dark-400 hover:text-accent transition">Sign out</button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Collapse Toggle (desktop only) */}
       <div className="hidden lg:block border-t border-dark-600/50 p-2">

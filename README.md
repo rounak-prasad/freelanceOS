@@ -18,6 +18,9 @@ infrastructure — GST, TDS, FIRC, 44ADA, UPI and cross-border.
 - 💸 **Real payment rails** — Razorpay payment links/orders + a no-key UPI deep-link/QR on every invoice.
 - 🤖 **AI assistant** — now via a secure server proxy (the old browser-side widget could never work).
 - 🗂️ Plus the full suite: clients, projects, milestones, proposals, contracts, time tracking, expenses, reports.
+- 🔐 **Enterprise foundation (v2)** — real accounts (scrypt + JWT), a relational
+  multi-tenant database (workspace-scoped, audit-logged), and tenant-scoped
+  Clients/Invoices APIs with server-side GST. Zero-config local mode still works.
 
 ## Tech
 
