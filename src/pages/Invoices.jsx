@@ -1,11 +1,13 @@
 import React, { useState, useMemo } from 'react';
 import { useData } from '../context/DataContext';
 import { formatINR, formatDate, generateInvoiceNumber, generateId, calculateGST, STATE_CODES } from '../utils/helpers';
+import { gstOnInvoice } from '../config/taxRules';
+import { upiLink, qrImageUrl, createPaymentLink } from '../services/payments';
 import StatusBadge from '../components/UI/StatusBadge';
 import ConfirmDialog from '../components/UI/ConfirmDialog';
 import InvoiceForm from '../components/Invoices/InvoiceForm';
 import InvoicePreview from '../components/Invoices/InvoicePreview';
-import { FileText, Plus, Trash2, Eye, ArrowLeft, Filter, Search, IndianRupee } from 'lucide-react';
+import { FileText, Plus, Trash2, Eye, ArrowLeft, Filter, Search, IndianRupee, Link2, X, Copy, Loader2 } from 'lucide-react';
 
 export default function Invoices() {
   const { state, dispatch, addToast } = useData();
@@ -15,20 +17,56 @@ export default function Invoices() {
   const [statusFilter, setStatusFilter] = useState('All');
   const [search, setSearch] = useState('');
 
+  // Collect-payment modal state
+  const [payInvoice, setPayInvoice] = useState(null);
+  const [payLink, setPayLink] = useState('');
+  const [payLoading, setPayLoading] = useState(false);
+
+  const upiVpa = state.settings.upiVpa || state.settings.upiId || state.settings.upi || '';
+  const payeeName = state.settings.businessName || state.settings.yourName || 'FreelanceOS';
+
   const filteredInvoices = useMemo(() => {
     return state.invoices.filter(inv => {
       const matchesStatus = statusFilter === 'All' || inv.status === statusFilter;
-      const matchesSearch = !search || 
+      const matchesSearch = !search ||
         inv.invoiceNumber.toLowerCase().includes(search.toLowerCase()) ||
         inv.clientName.toLowerCase().includes(search.toLowerCase());
       return matchesStatus && matchesSearch;
     }).sort((a, b) => new Date(b.date) - new Date(a.date));
   }, [state.invoices, statusFilter, search]);
 
+  // Export of services is zero-rated under LUT — totals reflect that.
+  function isExportInvoice(inv) {
+    if (inv.isExport || inv.exportOfService || inv.export) return true;
+    if (inv.currency && inv.currency !== 'INR') return true;
+    const c = (state.clients || []).find(x => x.name === inv.clientName || x.id === inv.clientId);
+    return !!(c && c.country && String(c.country).toLowerCase() !== 'india');
+  }
+
   function getInvoiceTotal(inv) {
     const subtotal = (inv.lineItems || []).reduce((s, item) => s + (item.quantity * item.rate), 0);
-    const gst = calculateGST(subtotal, 18, inv.placeOfSupply !== (state.settings.gstin || '').substring(0, 2));
-    return gst.total;
+    const sameState = inv.placeOfSupply === (state.settings.gstin || '').substring(0, 2);
+    const g = gstOnInvoice({ amount: subtotal, isExportOfService: isExportInvoice(inv), hasLUT: state.settings.hasLUT ?? false, sameState });
+    return subtotal + g.total; // grand total (zero GST for exports under LUT)
+  }
+
+  function openCollect(inv) {
+    setPayLink('');
+    setPayInvoice(inv);
+  }
+
+  async function genRzpLink(inv) {
+    setPayLoading(true);
+    setPayLink('');
+    try {
+      const r = await createPaymentLink({ invoiceId: inv.invoiceNumber, amount: getInvoiceTotal(inv), customer: { name: inv.clientName }, description: `Invoice ${inv.invoiceNumber}` });
+      setPayLink(r.shortUrl || r.short_url || '');
+      addToast('Payment link created');
+    } catch (e) {
+      addToast(e.status === 503 ? 'Add Razorpay keys on the API server to enable links' : 'Could not create link right now', 'warning');
+    } finally {
+      setPayLoading(false);
+    }
   }
 
   function handleCreateInvoice(invoiceData) {
@@ -61,6 +99,11 @@ export default function Invoices() {
   }
 
   const statusTabs = ['All', 'Draft', 'Sent', 'Paid', 'Overdue'];
+
+  // UPI deep link for the invoice currently in the collect modal
+  const upiStr = payInvoice && upiVpa
+    ? upiLink({ payeeVpa: upiVpa, payeeName, amount: getInvoiceTotal(payInvoice), note: payInvoice.invoiceNumber })
+    : '';
 
   return (
     <div className="page-enter space-y-6">
@@ -140,6 +183,11 @@ export default function Invoices() {
                           <p className="text-xs text-dark-400">{formatDate(inv.date)}</p>
                         </div>
                         <div className="flex items-center gap-1">
+                          {inv.status !== 'Paid' && (
+                            <button onClick={() => openCollect(inv)} className="px-2 py-1 rounded text-xs font-medium bg-accent/10 text-accent hover:bg-accent/20 transition-colors" title="Collect payment">
+                              Collect
+                            </button>
+                          )}
                           <button onClick={() => { setSelectedInvoice(inv); setView('preview'); }} className="p-2 rounded-lg text-dark-300 hover:text-dark-50 hover:bg-dark-700 transition-colors" title="View">
                             <Eye className="w-4 h-4" />
                           </button>
@@ -186,6 +234,49 @@ export default function Invoices() {
 
       <ConfirmDialog isOpen={!!deleteId} onClose={() => setDeleteId(null)} onConfirm={handleDelete}
         title="Delete Invoice" message="Are you sure? This action cannot be undone." />
+
+      {/* COLLECT PAYMENT MODAL */}
+      {payInvoice && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={() => setPayInvoice(null)}>
+          <div className="glass-card p-6 w-full max-w-md animate-scale-in" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-1">
+              <h3 className="section-title flex items-center gap-2"><IndianRupee className="w-5 h-5 text-accent" /> Collect Payment</h3>
+              <button onClick={() => setPayInvoice(null)} className="text-dark-400 hover:text-dark-50"><X className="w-5 h-5" /></button>
+            </div>
+            <p className="text-sm text-dark-300">{payInvoice.invoiceNumber} • {payInvoice.clientName}</p>
+            <p className="text-2xl font-bold text-dark-50 mb-4">{formatINR(getInvoiceTotal(payInvoice))}</p>
+
+            {/* UPI (no keys needed) */}
+            {upiVpa ? (
+              <div className="rounded-lg bg-dark-700/40 p-4 mb-4 text-center">
+                <p className="text-xs text-dark-300 mb-2">Scan to pay via any UPI app</p>
+                <img src={qrImageUrl(upiStr)} alt="UPI QR code" className="w-44 h-44 mx-auto rounded-lg bg-white p-2" />
+                <div className="flex items-center justify-center gap-2 mt-3">
+                  <code className="text-xs text-accent break-all">{upiVpa}</code>
+                  <button onClick={() => { navigator.clipboard.writeText(upiStr); addToast('UPI link copied'); }} className="text-dark-400 hover:text-accent"><Copy className="w-3.5 h-3.5" /></button>
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-lg bg-amber-500/5 border border-amber-500/20 p-3 mb-4 text-xs text-amber-400">
+                Add your UPI ID in Settings to show a pay-by-UPI QR on every invoice.
+              </div>
+            )}
+
+            {/* Razorpay payment link (needs server keys) */}
+            <button onClick={() => genRzpLink(payInvoice)} disabled={payLoading} className="btn-primary w-full flex items-center justify-center gap-2">
+              {payLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Link2 className="w-4 h-4" />}
+              {payLoading ? 'Creating link...' : 'Create Razorpay payment link'}
+            </button>
+            {payLink && (
+              <div className="mt-3 flex items-center gap-2 bg-dark-700/40 rounded-lg p-2">
+                <a href={payLink} target="_blank" rel="noopener noreferrer" className="text-xs text-accent break-all flex-1">{payLink}</a>
+                <button onClick={() => { navigator.clipboard.writeText(payLink); addToast('Link copied'); }} className="text-dark-400 hover:text-accent"><Copy className="w-3.5 h-3.5" /></button>
+              </div>
+            )}
+            <p className="text-[11px] text-dark-500 mt-3">UPI works with zero setup. Razorpay links need RAZORPAY keys on the API server.</p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

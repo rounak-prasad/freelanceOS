@@ -3,6 +3,7 @@ import { Navigate, Routes, Route } from 'react-router-dom';
 import Sidebar from './components/Layout/Sidebar';
 import ToastContainer from './components/UI/Toast';
 import AIChatWidget from './components/UI/AIChatWidget';
+import GuardrailAlerts from './components/UI/GuardrailAlerts';
 import { useData } from './context/DataContext';
 
 // Lazy load pages for better initial load
@@ -81,7 +82,7 @@ export default function App() {
         <div className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8 py-6 pt-16 lg:pt-6">
           <Suspense fallback={<PageLoader />}>
             <Routes>
-              <Route path="/" element={<Dashboard />} />
+              <Route path="/" element={<div className="space-y-6"><GuardrailAlerts /><Dashboard /></div>} />
               <Route path="/clients" element={<Clients />} />
               <Route path="/client-ledger" element={<ClientLedger />} />
               <Route path="/milestones" element={<Milestones />} />

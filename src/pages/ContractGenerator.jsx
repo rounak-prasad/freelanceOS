@@ -1,11 +1,18 @@
 // ==========================================
 // FreelanceOS — Contract Generator Page
 // ==========================================
+// Generates a complete India-law service agreement LOCALLY (no API key needed)
+// via src/services/contractTemplate.js — TDS (194J), GST/LUT, IP-on-payment,
+// MSMED late-payment interest and arbitration clauses included. Optional
+// "Refine with AI" polishes the text via the secure server proxy. The old code
+// called Anthropic from the browser with no auth and never worked.
 import React, { useState } from 'react';
 import { useData } from '../context/DataContext';
 import jsPDF from 'jspdf';
+import { buildIndiaContract } from '../services/contractTemplate';
+import { apiPost } from '../services/apiClient';
 import {
-  ScrollText, Loader2, Copy, Download, ChevronDown, MessageCircle, FileText,
+  ScrollText, Loader2, Copy, Download, ChevronDown, MessageCircle, FileText, Sparkles,
 } from 'lucide-react';
 
 const PAYMENT_OPTIONS = ['50% Advance', '30-60-10', '100% on delivery', 'Custom'];
@@ -39,42 +46,32 @@ export default function ContractGenerator() {
 
   function set(key, val) { setForm(prev => ({ ...prev, [key]: val })); }
 
-  async function generateContract() {
+  // Build the India-law contract locally — instant, works with no API key.
+  function generateContract() {
     if (!form.clientName || !form.description || !form.value) {
       addToast('Please fill in all required fields', 'error');
       return;
     }
+    const text = buildIndiaContract(form, settings);
+    setContract(text);
+    addToast('Contract generated — review the India-specific clauses');
+  }
 
+  // Optional: polish the generated contract via the secure AI proxy.
+  async function refineWithAI() {
+    if (!contract) return;
     setLoading(true);
-    setContract('');
-
-    const prompt = `Generate a professional freelance service agreement under the Indian Contract Act, 1872 for:
-Freelancer: ${form.yourName}, ${settings.address || 'India'}
-Client: ${form.clientName}
-Project: ${form.description}
-Value: ₹${form.value}
-Payment: ${form.paymentTerms}
-Timeline: ${form.startDate} to ${form.endDate}
-Revisions: ${form.revisions} rounds
-Governing Law: ${form.governingState}, India
-
-Include: scope of work, payment schedule, revision policy, IP ownership (transfers to client on full payment), confidentiality clause, termination clause (30 days notice), dispute resolution (arbitration in ${form.governingState}). Format with clear numbered sections. Professional legal language but plain English.`;
-
     try {
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-opus-4-20250514",
-          max_tokens: 1000,
-          messages: [{ role: "user", content: prompt }]
-        })
+      const data = await apiPost('/ai/chat', {
+        system: 'You are an Indian contract lawyer. Tighten and professionalise the agreement while KEEPING every India-specific clause intact (GST/LUT, TDS Section 194J, IP transfer on full payment, MSMED Act late-payment interest, arbitration & governing law). Return ONLY the final contract text, no commentary.',
+        messages: [{ role: 'user', content: contract }],
       });
-      const data = await response.json();
-      const text = data.content?.map(b => b.text || '').join('') || 'Failed to generate contract.';
-      setContract(text);
-    } catch (err) {
-      addToast('Failed to generate contract. Check your API key.', 'error');
+      if (data.text && data.text.trim()) {
+        setContract(data.text.trim());
+        addToast('Refined with AI');
+      }
+    } catch (e) {
+      addToast(e.status === 503 ? 'AI not configured — keeping the template as-is' : 'AI refine unavailable right now', 'warning');
     } finally {
       setLoading(false);
     }
@@ -98,20 +95,20 @@ Include: scope of work, payment schedule, revision policy, IP ownership (transfe
 
   function downloadContractPDF() {
     const doc = new jsPDF({ unit: 'mm', format: 'a4' });
-    
+
     // Title
     doc.setFontSize(16);
     doc.setFont('helvetica', 'bold');
     doc.text('FREELANCE SERVICE AGREEMENT', 105, 20, { align: 'center' });
-    
+
     doc.setFontSize(9);
     doc.setFont('helvetica', 'normal');
-    
+
     // Split contract text into lines that fit A4 width
     const lines = doc.splitTextToSize(contract, 175);
     let y = 35;
     const pageHeight = 280;
-    
+
     lines.forEach(line => {
       if (y > pageHeight) {
         doc.addPage();
@@ -120,16 +117,16 @@ Include: scope of work, payment schedule, revision policy, IP ownership (transfe
       doc.text(line, 17, y);
       y += 5;
     });
-    
+
     // Footer
     const totalPages = doc.internal.getNumberOfPages();
     for (let i = 1; i <= totalPages; i++) {
       doc.setPage(i);
       doc.setFontSize(8);
       doc.setTextColor(150);
-      doc.text(`Generated by FreelancerOS India — ${new Date().toLocaleDateString('en-IN')}`, 105, 290, { align: 'center' });
+      doc.text(`Generated by FreelanceOS — ${new Date().toLocaleDateString('en-IN')}`, 105, 290, { align: 'center' });
     }
-    
+
     doc.save(`Contract_${form.clientName.replace(/\s/g,'_')}_${new Date().toISOString().split('T')[0]}.pdf`);
     addToast('Contract PDF downloaded!');
   }
@@ -137,7 +134,7 @@ Include: scope of work, payment schedule, revision policy, IP ownership (transfe
   function sendViaWhatsApp() {
     // Download the PDF first
     downloadContractPDF();
-    
+
     // Pre-formatted message
     const message = `Hi ${form.clientName}, please find the service agreement for ${form.description.substring(0, 50)}${form.description.length > 50 ? '...' : ''} attached. Please review and confirm your acceptance. — ${form.yourName}`;
     const url = `https://wa.me/?text=${encodeURIComponent(message)}`;
@@ -152,7 +149,7 @@ Include: scope of work, payment schedule, revision policy, IP ownership (transfe
           <ScrollText className="w-6 h-6 text-accent" />
           Contract Generator
         </h1>
-        <p className="text-sm text-dark-300 mt-0.5">Generate service agreements under the Indian Contract Act, 1872</p>
+        <p className="text-sm text-dark-300 mt-0.5">India-law service agreements — TDS, GST/LUT, IP-on-payment, MSMED interest & arbitration built in</p>
       </div>
 
       {/* Form */}
@@ -230,16 +227,22 @@ Include: scope of work, payment schedule, revision policy, IP ownership (transfe
           </div>
         </div>
 
-        <button onClick={generateContract} disabled={loading} className="btn-primary flex items-center gap-2">
-          {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <ScrollText className="w-4 h-4" />}
-          {loading ? 'Generating...' : 'Generate Contract'}
+        <button onClick={generateContract} className="btn-primary flex items-center gap-2">
+          <ScrollText className="w-4 h-4" />
+          Generate Contract
         </button>
       </div>
 
       {/* Preview */}
       {contract && (
         <div className="glass-card p-6 space-y-4">
-          <h3 className="text-sm font-semibold text-dark-100">Generated Contract</h3>
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-dark-100">Generated Contract</h3>
+            <button onClick={refineWithAI} disabled={loading} className="btn-secondary flex items-center gap-2 text-xs">
+              {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5 text-accent" />}
+              {loading ? 'Refining...' : 'Refine with AI'}
+            </button>
+          </div>
           <div className="bg-dark-700 rounded-lg p-5 max-h-[500px] overflow-y-auto custom-scroll">
             <pre className="text-sm text-dark-100 whitespace-pre-wrap font-sans leading-relaxed">{contract}</pre>
           </div>
@@ -257,6 +260,7 @@ Include: scope of work, payment schedule, revision policy, IP ownership (transfe
               <Download className="w-4 h-4" /> Download TXT
             </button>
           </div>
+          <p className="text-xs text-dark-400">Starting template, not legal advice — have a lawyer review before signing.</p>
         </div>
       )}
     </div>
