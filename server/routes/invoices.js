@@ -19,33 +19,33 @@ router.use(requireAuth, resolveWorkspace);
 // Roles allowed to mutate business data (viewers are read-only).
 const CAN_WRITE = ['owner', 'admin', 'member'];
 
-router.get('/', asyncHandler((req, res) => {
-  res.json(repo.listInvoices(getDb(), req.workspaceId));
+router.get('/', asyncHandler(async (req, res) => {
+  res.json(await repo.listInvoices(getDb(), req.workspaceId));
 }));
 
-router.post('/', requireRole(...CAN_WRITE), enforceLimit('invoicesPerMonth'), asyncHandler((req, res) => {
+router.post('/', requireRole(...CAN_WRITE), enforceLimit('invoicesPerMonth'), asyncHandler(async (req, res) => {
   const body = req.body || {};
   if (!Array.isArray(body.items) || body.items.length === 0) bad('At least one line item is required');
-  const inv = repo.createInvoice(getDb(), req.workspaceId, body);
+  const inv = await repo.createInvoice(getDb(), req.workspaceId, body);
   writeAudit(getDb(), { workspaceId: req.workspaceId, userId: req.auth.userId, action: 'invoice.create', entityType: 'invoice', entityId: inv.id, ip: req.ip, meta: { number: inv.number, total_minor: inv.total_minor } });
   res.status(201).json(inv);
 }));
 
-router.get('/:id', asyncHandler((req, res) => {
-  const inv = repo.getInvoice(getDb(), req.workspaceId, req.params.id);
+router.get('/:id', asyncHandler(async (req, res) => {
+  const inv = await repo.getInvoice(getDb(), req.workspaceId, req.params.id);
   if (!inv) notFound('Invoice not found');
   res.json(inv);
 }));
 
-router.patch('/:id', requireRole(...CAN_WRITE), asyncHandler((req, res) => {
-  const inv = repo.updateInvoice(getDb(), req.workspaceId, req.params.id, req.body || {});
+router.patch('/:id', requireRole(...CAN_WRITE), asyncHandler(async (req, res) => {
+  const inv = await repo.updateInvoice(getDb(), req.workspaceId, req.params.id, req.body || {});
   if (!inv) notFound('Invoice not found');
   writeAudit(getDb(), { workspaceId: req.workspaceId, userId: req.auth.userId, action: 'invoice.update', entityType: 'invoice', entityId: inv.id, ip: req.ip });
   res.json(inv);
 }));
 
-router.delete('/:id', requireRole(...CAN_WRITE), asyncHandler((req, res) => {
-  const ok = repo.deleteInvoice(getDb(), req.workspaceId, req.params.id);
+router.delete('/:id', requireRole(...CAN_WRITE), asyncHandler(async (req, res) => {
+  const ok = await repo.deleteInvoice(getDb(), req.workspaceId, req.params.id);
   if (!ok) notFound('Invoice not found');
   writeAudit(getDb(), { workspaceId: req.workspaceId, userId: req.auth.userId, action: 'invoice.delete', entityType: 'invoice', entityId: req.params.id, ip: req.ip });
   res.json({ ok: true });

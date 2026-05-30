@@ -15,38 +15,38 @@ import { verifyRazorpaySignature, applyBillingWebhook } from '../server/lib/bill
 let pass = 0, fail = 0;
 const ok = (name, cond, extra = '') => { if (cond) pass++; else { fail++; console.log('  ✗ FAIL:', name, extra); } };
 
-const db = createMemoryDb();
+const db = await createMemoryDb();
 _setDbForTests(db);
 
-function makeWorkspace(name) {
+async function makeWorkspace(name) {
   const now = new Date().toISOString();
   const user = { id: crypto.randomUUID(), email: `${name}@x.in`, password_hash: hashPassword('password123'), name, created_at: now, updated_at: now };
   const ws = { id: crypto.randomUUID(), name: `${name} WS`, owner_user_id: user.id };
-  db.tx((tx) => {
-    repo.insertUser(tx, user);
-    repo.insertWorkspace(tx, ws);
-    repo.insertMembership(tx, { id: crypto.randomUUID(), workspace_id: ws.id, user_id: user.id, role: 'owner', created_at: now });
+  await db.tx(async (tx) => {
+    await repo.insertUser(tx, user);
+    await repo.insertWorkspace(tx, ws);
+    await repo.insertMembership(tx, { id: crypto.randomUUID(), workspace_id: ws.id, user_id: user.id, role: 'owner', created_at: now });
   });
   return { user, ws };
 }
 
 console.log('— Default plan is Free —');
-const A = makeWorkspace('alpha');
-let snap = entitlementsSnapshot(db, A.ws.id);
+const A = await makeWorkspace('alpha');
+let snap = await entitlementsSnapshot(db, A.ws.id);
 ok('no row defaults to free/active', snap.effectivePlan === 'free' && snap.subscription.status === 'active');
 ok('free limits', snap.limits.clients === 5 && snap.limits.invoicesPerMonth === 10 && snap.limits.members === 1);
 ok('free has AI locked, cross-border on', snap.features.aiAssistant === false && snap.features.crossBorder === true);
 
 console.log('— Limit math —');
-for (let i = 0; i < 5; i++) repo.createClient(db, A.ws.id, { name: `Client ${i}` });
-const usage = computeUsage(db, A.ws.id);
+for (let i = 0; i < 5; i++) await repo.createClient(db, A.ws.id, { name: `Client ${i}` });
+const usage = await computeUsage(db, A.ws.id);
 ok('5 clients counted', usage.clients === 5);
 ok('free client cap reached at 5', withinLimit(usage.clients, getPlan('free').limits.clients) === false);
 ok('member seat cap: owner alone fills free (1)', withinLimit(usage.members + usage.pendingInvites, getPlan('free').limits.members) === false);
 
 console.log('— Upgrade unlocks capacity —');
-repo.upsertSubscription(db, A.ws.id, { plan: 'pro', status: 'active' });
-snap = entitlementsSnapshot(db, A.ws.id);
+await repo.upsertSubscription(db, A.ws.id, { plan: 'pro', status: 'active' });
+snap = await entitlementsSnapshot(db, A.ws.id);
 ok('pro effective + AI unlocked', snap.effectivePlan === 'pro' && snap.features.aiAssistant === true);
 ok('pro clients unlimited', withinLimit(9999, getPlan('pro').limits.clients) === true);
 
@@ -65,22 +65,23 @@ ok('wrong secret rejected', verifyRazorpaySignature(raw, sig, 'nope') === false)
 ok('missing secret rejected', verifyRazorpaySignature(raw, sig, '') === false);
 
 console.log('— Webhook drives subscription state —');
-const r1 = applyBillingWebhook(db, body);
+const r1 = await applyBillingWebhook(db, body);
 ok('activated → active + plan from notes', r1.applied && r1.applied.status === 'active' && r1.applied.plan === 'team');
 ok('current_period_end set from current_end', !!r1.applied.current_period_end);
 
-repo.upsertSubscription(db, A.ws.id, { provider: 'razorpay', provider_subscription_id: 'sub_777' });
-const byId = applyBillingWebhook(db, { event: 'subscription.charged', payload: { subscription: { entity: { id: 'sub_777' } } } });
+await repo.upsertSubscription(db, A.ws.id, { provider: 'razorpay', provider_subscription_id: 'sub_777' });
+const byId = await applyBillingWebhook(db, { event: 'subscription.charged', payload: { subscription: { entity: { id: 'sub_777' } } } });
 ok('resolves workspace by provider id when notes absent', byId.wsId === A.ws.id && byId.applied.status === 'active');
 
-const cancelled = applyBillingWebhook(db, { event: 'subscription.cancelled', payload: { subscription: { entity: { id: 'sub_777', notes: { workspaceId: A.ws.id } } } } });
+const cancelled = await applyBillingWebhook(db, { event: 'subscription.cancelled', payload: { subscription: { entity: { id: 'sub_777', notes: { workspaceId: A.ws.id } } } } });
 ok('cancelled event → cancelled status', cancelled.applied.status === 'cancelled');
-ok('unknown event is logged but applies no status', applyBillingWebhook(db, { event: 'subscription.weird', payload: { subscription: { entity: { id: 'sub_777' } } } }).applied === null);
-ok('billing_events are recorded', db.get('SELECT COUNT(*) AS n FROM billing_events WHERE workspace_id = ?', [A.ws.id]).n >= 3);
+const unknown = await applyBillingWebhook(db, { event: 'subscription.weird', payload: { subscription: { entity: { id: 'sub_777' } } } });
+ok('unknown event is logged but applies no status', unknown.applied === null);
+ok('billing_events are recorded', (await db.get('SELECT COUNT(*) AS n FROM billing_events WHERE workspace_id = ?', [A.ws.id])).n >= 3);
 
 console.log('— Tenant isolation of subscriptions —');
-const B = makeWorkspace('beta');
-ok('other workspace still free', entitlementsSnapshot(db, B.ws.id).effectivePlan === 'free');
+const B = await makeWorkspace('beta');
+ok('other workspace still free', (await entitlementsSnapshot(db, B.ws.id)).effectivePlan === 'free');
 
 console.log(`\nRESULT: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

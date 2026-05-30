@@ -33,17 +33,17 @@ const REFRESH_TTL_DAYS = 30;             // 30d rotating refresh token
 const inDev = () => process.env.NODE_ENV !== 'production';
 
 /** Mint an access JWT + a fresh rotating refresh token (hash persisted). */
-function issueSession(db, user, wsid) {
+async function issueSession(db, user, wsid) {
   const token = signJwt({ sub: user.id, email: user.email, wsid }, jwtSecret(), ACCESS_TTL);
   const refreshRaw = randomToken();
-  repo.createRefreshToken(db, { userId: user.id, tokenHash: sha256(refreshRaw), ttlDays: REFRESH_TTL_DAYS });
+  await repo.createRefreshToken(db, { userId: user.id, tokenHash: sha256(refreshRaw), ttlDays: REFRESH_TTL_DAYS });
   return { token, refreshToken: refreshRaw };
 }
 
 /** Create + email an email-verification token. Returns the raw token (dev only). */
 async function sendVerificationEmail(db, user) {
   const raw = randomToken();
-  repo.createEmailToken(db, { userId: user.id, kind: 'verify', tokenHash: sha256(raw), ttlHours: 48 });
+  await repo.createEmailToken(db, { userId: user.id, kind: 'verify', tokenHash: sha256(raw), ttlHours: 48 });
   await sendMail({
     to: user.email,
     subject: 'Verify your FreelanceOS email',
@@ -58,7 +58,7 @@ router.post('/register', asyncHandler(async (req, res) => {
   requireFields(req.body || {}, ['email', 'password']);
   if (!isEmail(email)) bad('Please enter a valid email address');
   if (String(password).length < 8) bad('Password must be at least 8 characters');
-  if (repo.findUserByEmail(db, email)) bad('An account with this email already exists');
+  if (await repo.findUserByEmail(db, email)) bad('An account with this email already exists');
 
   const now = new Date().toISOString();
   const user = {
@@ -70,15 +70,15 @@ router.post('/register', asyncHandler(async (req, res) => {
     name: workspaceName || (name ? `${name}'s Workspace` : 'My Workspace'),
     owner_user_id: user.id,
   };
-  db.tx((tx) => {
-    repo.insertUser(tx, user);
-    repo.insertWorkspace(tx, ws);
-    repo.insertMembership(tx, { id: crypto.randomUUID(), workspace_id: ws.id, user_id: user.id, role: 'owner', created_at: now });
-    repo.ensureAppState(tx, ws.id);
+  await db.tx(async (tx) => {
+    await repo.insertUser(tx, user);
+    await repo.insertWorkspace(tx, ws);
+    await repo.insertMembership(tx, { id: crypto.randomUUID(), workspace_id: ws.id, user_id: user.id, role: 'owner', created_at: now });
+    await repo.ensureAppState(tx, ws.id);
   });
   writeAudit(db, { workspaceId: ws.id, userId: user.id, action: 'auth.register', ip: req.ip });
 
-  const session = issueSession(db, user, ws.id);
+  const session = await issueSession(db, user, ws.id);
   const verifyToken = await sendVerificationEmail(db, user);
   res.status(201).json({
     ...session,
@@ -88,65 +88,65 @@ router.post('/register', asyncHandler(async (req, res) => {
   });
 }));
 
-router.post('/login', asyncHandler((req, res) => {
+router.post('/login', asyncHandler(async (req, res) => {
   const db = getDb();
   requireFields(req.body || {}, ['email', 'password']);
-  const u = repo.findUserByEmail(db, req.body.email);
+  const u = await repo.findUserByEmail(db, req.body.email);
   if (!u || !verifyPassword(req.body.password, u.password_hash)) {
     throw new HttpError(401, 'Invalid email or password');
   }
-  const workspaces = repo.listWorkspacesForUser(db, u.id);
-  const session = issueSession(db, u, workspaces[0]?.id);
+  const workspaces = await repo.listWorkspacesForUser(db, u.id);
+  const session = await issueSession(db, u, workspaces[0]?.id);
   writeAudit(db, { workspaceId: workspaces[0]?.id, userId: u.id, action: 'auth.login', ip: req.ip });
   res.json({ ...session, user: publicUser(u), workspaces });
 }));
 
-router.get('/me', requireAuth, asyncHandler((req, res) => {
+router.get('/me', requireAuth, asyncHandler(async (req, res) => {
   const db = getDb();
-  const u = repo.findUserById(db, req.auth.userId);
+  const u = await repo.findUserById(db, req.auth.userId);
   if (!u) throw new HttpError(401, 'User not found');
-  res.json({ user: publicUser(u), workspaces: repo.listWorkspacesForUser(db, u.id) });
+  res.json({ user: publicUser(u), workspaces: await repo.listWorkspacesForUser(db, u.id) });
 }));
 
-router.post('/refresh', asyncHandler((req, res) => {
+router.post('/refresh', asyncHandler(async (req, res) => {
   const db = getDb();
   requireFields(req.body || {}, ['refreshToken']);
   const oldHash = sha256(String(req.body.refreshToken));
   const newRaw = randomToken();
-  const r = repo.rotateRefreshToken(db, { oldHash, newHash: sha256(newRaw), ttlDays: REFRESH_TTL_DAYS });
+  const r = await repo.rotateRefreshToken(db, { oldHash, newHash: sha256(newRaw), ttlDays: REFRESH_TTL_DAYS });
   if (r.error) {
     // A reused (already-rotated) token is a theft signal: revoke the whole family.
-    if (r.error === 'revoked' && r.userId) repo.revokeAllRefreshTokensForUser(db, r.userId);
+    if (r.error === 'revoked' && r.userId) await repo.revokeAllRefreshTokensForUser(db, r.userId);
     throw new HttpError(401, 'Invalid or expired refresh token — please sign in again');
   }
-  const u = repo.findUserById(db, r.userId);
+  const u = await repo.findUserById(db, r.userId);
   if (!u) throw new HttpError(401, 'User not found');
-  const wsid = repo.listWorkspacesForUser(db, u.id)[0]?.id;
+  const wsid = (await repo.listWorkspacesForUser(db, u.id))[0]?.id;
   const token = signJwt({ sub: u.id, email: u.email, wsid }, jwtSecret(), ACCESS_TTL);
   res.json({ token, refreshToken: newRaw, user: publicUser(u) });
 }));
 
-router.post('/logout', asyncHandler((req, res) => {
+router.post('/logout', asyncHandler(async (req, res) => {
   const db = getDb();
-  if (req.body?.refreshToken) repo.revokeRefreshToken(db, sha256(String(req.body.refreshToken)));
+  if (req.body?.refreshToken) await repo.revokeRefreshToken(db, sha256(String(req.body.refreshToken)));
   res.json({ ok: true });
 }));
 
 router.post('/verify/request', requireAuth, asyncHandler(async (req, res) => {
   const db = getDb();
-  const u = repo.findUserById(db, req.auth.userId);
+  const u = await repo.findUserById(db, req.auth.userId);
   if (!u) throw new HttpError(401, 'User not found');
   if (u.email_verified) return res.json({ ok: true, alreadyVerified: true });
   const raw = await sendVerificationEmail(db, u);
   res.json({ ok: true, ...(inDev() ? { verifyToken: raw } : {}) });
 }));
 
-router.post('/verify/confirm', asyncHandler((req, res) => {
+router.post('/verify/confirm', asyncHandler(async (req, res) => {
   const db = getDb();
   requireFields(req.body || {}, ['token']);
-  const row = repo.consumeEmailToken(db, { tokenHash: sha256(String(req.body.token)), kind: 'verify' });
+  const row = await repo.consumeEmailToken(db, { tokenHash: sha256(String(req.body.token)), kind: 'verify' });
   if (!row) throw new HttpError(400, 'This verification link is invalid or has expired');
-  repo.setEmailVerified(db, row.user_id, 1);
+  await repo.setEmailVerified(db, row.user_id, 1);
   writeAudit(db, { userId: row.user_id, action: 'auth.email_verified', ip: req.ip });
   res.json({ ok: true });
 }));
@@ -154,11 +154,11 @@ router.post('/verify/confirm', asyncHandler((req, res) => {
 router.post('/password/forgot', asyncHandler(async (req, res) => {
   const db = getDb();
   requireFields(req.body || {}, ['email']);
-  const u = repo.findUserByEmail(db, req.body.email);
+  const u = await repo.findUserByEmail(db, req.body.email);
   // Always 200 — never reveal whether an email is registered.
   if (u) {
     const raw = randomToken();
-    repo.createEmailToken(db, { userId: u.id, kind: 'reset', tokenHash: sha256(raw), ttlHours: 1 });
+    await repo.createEmailToken(db, { userId: u.id, kind: 'reset', tokenHash: sha256(raw), ttlHours: 1 });
     await sendMail({
       to: u.email,
       subject: 'Reset your FreelanceOS password',
@@ -170,14 +170,14 @@ router.post('/password/forgot', asyncHandler(async (req, res) => {
   res.json({ ok: true });
 }));
 
-router.post('/password/reset', asyncHandler((req, res) => {
+router.post('/password/reset', asyncHandler(async (req, res) => {
   const db = getDb();
   requireFields(req.body || {}, ['token', 'password']);
   if (String(req.body.password).length < 8) bad('Password must be at least 8 characters');
-  const row = repo.consumeEmailToken(db, { tokenHash: sha256(String(req.body.token)), kind: 'reset' });
+  const row = await repo.consumeEmailToken(db, { tokenHash: sha256(String(req.body.token)), kind: 'reset' });
   if (!row) throw new HttpError(400, 'This reset link is invalid or has expired');
-  repo.updateUserPassword(db, row.user_id, hashPassword(req.body.password));
-  repo.revokeAllRefreshTokensForUser(db, row.user_id); // sign out everywhere
+  await repo.updateUserPassword(db, row.user_id, hashPassword(req.body.password));
+  await repo.revokeAllRefreshTokensForUser(db, row.user_id); // sign out everywhere
   writeAudit(db, { userId: row.user_id, action: 'auth.password_reset', ip: req.ip });
   res.json({ ok: true });
 }));

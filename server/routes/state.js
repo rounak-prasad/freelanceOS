@@ -14,17 +14,17 @@ import * as repo from '../db/repos.js';
 const router = Router();
 router.use(requireAuth, resolveWorkspace);
 
-router.get('/', asyncHandler((req, res) => {
-  res.json(repo.getAppState(getDb(), req.workspaceId));
+router.get('/', asyncHandler(async (req, res) => {
+  res.json(await repo.getAppState(getDb(), req.workspaceId));
 }));
 
-router.put('/', asyncHandler((req, res) => {
-  repo.setAppState(getDb(), req.workspaceId, req.body);
+router.put('/', asyncHandler(async (req, res) => {
+  await repo.setAppState(getDb(), req.workspaceId, req.body);
   res.json({ ok: true });
 }));
 
-router.delete('/', asyncHandler((req, res) => {
-  repo.clearAppState(getDb(), req.workspaceId);
+router.delete('/', asyncHandler(async (req, res) => {
+  await repo.clearAppState(getDb(), req.workspaceId);
   res.json({ ok: true });
 }));
 

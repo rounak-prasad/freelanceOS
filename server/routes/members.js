@@ -27,31 +27,31 @@ const ASSIGNABLE_ROLES = ['admin', 'member', 'viewer']; // 'owner' is special-ca
 
 router.use(requireAuth, resolveWorkspace);
 
-router.get('/members', asyncHandler((req, res) => {
-  res.json(repo.listMembers(getDb(), req.workspaceId));
+router.get('/members', asyncHandler(async (req, res) => {
+  res.json(await repo.listMembers(getDb(), req.workspaceId));
 }));
 
-router.patch('/members/:userId', requireRole('owner', 'admin'), asyncHandler((req, res) => {
+router.patch('/members/:userId', requireRole('owner', 'admin'), asyncHandler(async (req, res) => {
   const role = String(req.body?.role || '');
   if (role !== 'owner' && !ASSIGNABLE_ROLES.includes(role)) {
     bad(`Role must be one of: owner, ${ASSIGNABLE_ROLES.join(', ')}`);
   }
   if (role === 'owner' && req.role !== 'owner') throw new HttpError(403, 'Only an owner can grant the owner role');
-  const m = repo.updateMemberRole(getDb(), req.workspaceId, req.params.userId, role);
+  const m = await repo.updateMemberRole(getDb(), req.workspaceId, req.params.userId, role);
   if (!m) notFound('Member not found');
   writeAudit(getDb(), { workspaceId: req.workspaceId, userId: req.auth.userId, action: 'member.role_change', entityType: 'membership', entityId: req.params.userId, ip: req.ip, meta: { role } });
   res.json(m);
 }));
 
-router.delete('/members/:userId', requireRole('owner', 'admin'), asyncHandler((req, res) => {
-  const ok = repo.removeMember(getDb(), req.workspaceId, req.params.userId);
+router.delete('/members/:userId', requireRole('owner', 'admin'), asyncHandler(async (req, res) => {
+  const ok = await repo.removeMember(getDb(), req.workspaceId, req.params.userId);
   if (!ok) notFound('Member not found');
   writeAudit(getDb(), { workspaceId: req.workspaceId, userId: req.auth.userId, action: 'member.remove', entityType: 'membership', entityId: req.params.userId, ip: req.ip });
   res.json({ ok: true });
 }));
 
-router.get('/invitations', requireRole('owner', 'admin'), asyncHandler((req, res) => {
-  res.json(repo.listInvitations(getDb(), req.workspaceId));
+router.get('/invitations', requireRole('owner', 'admin'), asyncHandler(async (req, res) => {
+  res.json(await repo.listInvitations(getDb(), req.workspaceId));
 }));
 
 router.post('/invitations', requireRole('owner', 'admin'), enforceLimit('members'), asyncHandler(async (req, res) => {
@@ -61,16 +61,16 @@ router.post('/invitations', requireRole('owner', 'admin'), enforceLimit('members
   if (!isEmail(email)) bad('Please enter a valid email address');
   const role = ASSIGNABLE_ROLES.includes(req.body.role) ? req.body.role : 'member';
 
-  const existingUser = repo.findUserByEmail(db, email);
-  if (existingUser && repo.getMembership(db, req.workspaceId, existingUser.id)) {
+  const existingUser = await repo.findUserByEmail(db, email);
+  if (existingUser && (await repo.getMembership(db, req.workspaceId, existingUser.id))) {
     bad('That person is already a member of this workspace');
   }
   // One active invite per email: replace any prior pending one.
-  const pending = repo.findPendingInvitation(db, req.workspaceId, email);
-  if (pending) repo.revokeInvitation(db, req.workspaceId, pending.id);
+  const pending = await repo.findPendingInvitation(db, req.workspaceId, email);
+  if (pending) await repo.revokeInvitation(db, req.workspaceId, pending.id);
 
   const raw = randomToken();
-  const inv = repo.createInvitation(db, req.workspaceId, { email, role, tokenHash: sha256(raw), invitedBy: req.auth.userId });
+  const inv = await repo.createInvitation(db, req.workspaceId, { email, role, tokenHash: sha256(raw), invitedBy: req.auth.userId });
   const link = inviteLink(raw);
   await sendMail({
     to: email,
@@ -85,8 +85,8 @@ router.post('/invitations', requireRole('owner', 'admin'), enforceLimit('members
   res.status(201).json({ id: inv.id, email: inv.email, role: inv.role, status: inv.status, expiresAt: inv.expires_at, inviteLink: inviteLinkForDev });
 }));
 
-router.delete('/invitations/:id', requireRole('owner', 'admin'), asyncHandler((req, res) => {
-  const ok = repo.revokeInvitation(getDb(), req.workspaceId, req.params.id);
+router.delete('/invitations/:id', requireRole('owner', 'admin'), asyncHandler(async (req, res) => {
+  const ok = await repo.revokeInvitation(getDb(), req.workspaceId, req.params.id);
   if (!ok) notFound('Pending invitation not found');
   writeAudit(getDb(), { workspaceId: req.workspaceId, userId: req.auth.userId, action: 'invite.revoke', entityType: 'invitation', entityId: req.params.id, ip: req.ip });
   res.json({ ok: true });
@@ -94,11 +94,11 @@ router.delete('/invitations/:id', requireRole('owner', 'admin'), asyncHandler((r
 
 /* ── acceptance (auth only — invitee is not yet a member) ── */
 export const acceptRouter = Router();
-acceptRouter.post('/accept', requireAuth, asyncHandler((req, res) => {
+acceptRouter.post('/accept', requireAuth, asyncHandler(async (req, res) => {
   const db = getDb();
   requireFields(req.body || {}, ['token']);
-  const me = repo.findUserById(db, req.auth.userId);
-  const result = repo.acceptInvitation(db, {
+  const me = await repo.findUserById(db, req.auth.userId);
+  const result = await repo.acceptInvitation(db, {
     tokenHash: sha256(String(req.body.token)),
     userId: req.auth.userId,
     userEmail: me?.email,
