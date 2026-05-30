@@ -43,6 +43,8 @@ The Vite dev server proxies `/api/*` to the API automatically (see
 | `RAZORPAY_PLAN_PRO` / `RAZORPAY_PLAN_TEAM` | Razorpay subscription plan ids (billing tiers) |
 | `APP_BASE_URL` | Base URL for invite / verify / password-reset email links |
 | `IRP_BASE_URL` / `IRP_API_KEY` | GST e-invoicing + e-way bill via a GSP/ASP (sandbox without them) |
+| `DATA_ENCRYPTION_KEY` | Enables AES-256-GCM encryption at rest for the app_state blob |
+| `BACKUP_DIR` | Output directory for the all-tenant backup CLI (`npm run backup`) |
 | `SKYDO_API_KEY` / `WISE_API_TOKEN` | Optional cross-border / auto-FIRA partners |
 
 See `.env.example` for the full list.
@@ -215,10 +217,32 @@ mode) for member/role management and plan/usage/upgrade.
   feature. The chat widget uses the agent in cloud mode and the legacy
   data-context `/api/ai/chat` proxy in local mode.
 
+## v2.4 — Security & compliance
+
+- **Encryption at rest** (`server/lib/crypto.js`): the per-tenant `app_state`
+  blob (bank / UPI / foreign-account & FIRA data) is sealed with AES-256-GCM when
+  `DATA_ENCRYPTION_KEY` is set. Pass-through without a key (dev); legacy plaintext
+  rows decrypt unchanged, so enabling it is non-breaking.
+- **HTTP hardening** (`server/lib/security.js`): security headers on every
+  response (nosniff, frame-deny, locked CSP, HSTS over HTTPS), `x-powered-by`
+  removed, and a JSON-object body guard. Auth is Bearer-token (not cookies), so
+  the API isn't exposed to classic CSRF.
+- **Audit-log viewer** (`/api/admin/audit`, owner/admin): a paginated,
+  workspace-scoped view of every mutation already recorded in `audit_log`.
+- **Backups** (`server/lib/backup.js`; `/api/admin/backup` + `/restore`): a full
+  per-tenant JSON snapshot (owner), restorable for DR; plus `npm run backup` — an
+  all-tenant CLI to schedule via cron.
+- **DPDP/GDPR data rights** (`/api/account`): `GET /export` (portability) and a
+  password-confirmed `POST /delete` (erasure) that cascades — workspaces you own
+  and their data are deleted; memberships elsewhere are removed and those
+  workspaces survive.
+- **Frontend:** a **Security & Data** page — audit log, data export, workspace
+  backup, and the account-deletion danger zone.
+
 ## Tests
 
 ```bash
-npm test   # 180 assertions across 9 suites:
+npm test   # 212 assertions across 11 suites:
 #   logic.test.mjs           34 — tax, GST, advance tax, guardrails, FX, cash-flow
 #   foundation.test.mjs      26 — password hashing, JWT, multi-tenant isolation, server-side GST
 #   migrations.test.mjs      15 — migration runner idempotency + schema shape
@@ -228,6 +252,8 @@ npm test   # 180 assertions across 9 suites:
 #   pg_adapter.test.mjs       5 — Postgres `?`→`$n` placeholder translation
 #   einvoice.test.mjs        29 — IRP payload + validation, e-way bill, GSTR-1 sections, sandbox IRN
 #   ai_agent.test.mjs        11 — workspace-scoped tools + agent loop (mock model)
+#   security.test.mjs        15 — field encryption, app_state-at-rest, headers, body guard
+#   compliance.test.mjs      17 — backup export/restore, audit viewer, DPDP account erasure
 ```
 
 The whole suite runs on SQLite; because the data layer is async, awaiting the

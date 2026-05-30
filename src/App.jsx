@@ -33,6 +33,7 @@ const Settings = lazy(() => import('./pages/Settings'));
 const Team = lazy(() => import('./pages/Team'));
 const Billing = lazy(() => import('./pages/Billing'));
 const GstFiling = lazy(() => import('./pages/GstFiling'));
+const SecurityData = lazy(() => import('./pages/SecurityData'));
 
 // New pages
 const ScopeCreep = lazy(() => import('./pages/ScopeCreep'));
@@ -111,6 +112,7 @@ export default function App() {
               <Route path="/team" element={<Team />} />
               <Route path="/billing" element={<Billing />} />
               <Route path="/gst-filing" element={<GstFiling />} />
+              <Route path="/security" element={<SecurityData />} />
               <Route path="/settings" element={<Settings />} />
 
               {/* New Pages */}

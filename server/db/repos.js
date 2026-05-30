@@ -11,6 +11,7 @@
 import crypto from 'node:crypto';
 import { boolInt, orNull, HttpError } from '../lib/validate.js';
 import { computeInvoice } from '../lib/invoiceService.js';
+import { encryptString, decryptString } from '../lib/crypto.js';
 
 /* ───────────────────────── users / workspaces ───────────────────────── */
 
@@ -228,16 +229,18 @@ export async function deleteInvoice(db, wsId, id) {
 
 export async function ensureAppState(db, wsId) {
   if (!(await db.get('SELECT 1 AS x FROM app_state WHERE workspace_id = ?', [wsId]))) {
-    await db.run('INSERT INTO app_state (workspace_id, data, updated_at) VALUES (?, ?, ?)', [wsId, '{}', new Date().toISOString()]);
+    await db.run('INSERT INTO app_state (workspace_id, data, updated_at) VALUES (?, ?, ?)', [wsId, encryptString('{}'), new Date().toISOString()]);
   }
 }
+// app_state holds the tenant's most sensitive data (bank/UPI/FIRA), so it is
+// encrypted at rest when DATA_ENCRYPTION_KEY is set (pass-through otherwise).
 export async function getAppState(db, wsId) {
   const r = await db.get('SELECT data FROM app_state WHERE workspace_id = ?', [wsId]);
   if (!r) return {};
-  try { return JSON.parse(r.data || '{}'); } catch { return {}; }
+  try { return JSON.parse(decryptString(r.data) || '{}'); } catch { return {}; }
 }
 export async function setAppState(db, wsId, data) {
-  const json = JSON.stringify(data ?? {});
+  const json = encryptString(JSON.stringify(data ?? {}));
   const now = new Date().toISOString();
   if (await db.get('SELECT 1 AS x FROM app_state WHERE workspace_id = ?', [wsId])) {
     await db.run('UPDATE app_state SET data = ?, updated_at = ? WHERE workspace_id = ?', [json, now, wsId]);
@@ -519,3 +522,35 @@ export const listInvoicesForGstr1 = async (db, wsId, fromISO, toISO) =>
       ORDER BY i.issue_date, i.number`,
     [wsId, fromISO, toISO]
   );
+
+/* ═══════════════════════ Phase 3: audit log / erasure ═══════════════════════ */
+
+/** Paginated, workspace-scoped audit entries (newest first). */
+export const listAuditLog = async (db, wsId, { limit = 100, offset = 0, action = null } = {}) => {
+  const lim = Math.min(500, Math.max(1, Number(limit) || 100));
+  const off = Math.max(0, Number(offset) || 0);
+  if (action) {
+    return db.all(
+      'SELECT * FROM audit_log WHERE workspace_id = ? AND action LIKE ? ORDER BY created_at DESC LIMIT ? OFFSET ?',
+      [wsId, `${action}%`, lim, off]
+    );
+  }
+  return db.all(
+    'SELECT * FROM audit_log WHERE workspace_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?',
+    [wsId, lim, off]
+  );
+};
+
+export const countAuditLog = async (db, wsId) =>
+  (await db.get('SELECT COUNT(*) AS n FROM audit_log WHERE workspace_id = ?', [wsId]))?.n || 0;
+
+/**
+ * Hard-delete a user (DPDP/GDPR right to erasure). FK cascades remove the
+ * workspaces they OWN (and all of those workspaces' data) plus the user's
+ * memberships everywhere; workspaces owned by others survive. Requires
+ * PRAGMA foreign_keys = ON (set on every SQLite connection) / Postgres FKs.
+ */
+export async function deleteUser(db, userId) {
+  const r = await db.run('DELETE FROM users WHERE id = ?', [userId]);
+  return (r.changes || 0) > 0;
+}
