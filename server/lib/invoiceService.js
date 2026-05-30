@@ -28,6 +28,8 @@ export function computeInvoice({ items = [], isExport = false, hasLUT = false, s
       unitPriceMinor,
       amountMinor,
       position: i,
+      hsnSac: it.hsnSac != null && it.hsnSac !== '' ? String(it.hsnSac).slice(0, 8) : null,
+      unit: it.unit != null && it.unit !== '' ? String(it.unit).slice(0, 8).toUpperCase() : null,
     };
   });
 

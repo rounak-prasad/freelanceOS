@@ -10,6 +10,7 @@ import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useData } from '../../context/DataContext';
 import { formatINR, calculateGST, getCurrentFY } from '../../utils/helpers';
 import { apiPost } from '../../services/apiClient';
+import APP_CONFIG from '../../config/appConfig.js';
 import { MessageSquare, Sparkles, Send, X, ArrowDown, Bot, Loader2 } from 'lucide-react';
 
 export default function AIChatWidget() {
@@ -188,13 +189,21 @@ Respond in a helpful, direct tone. Use ₹ symbol for amounts.`;
     }));
 
     try {
-      // Secure server proxy holds the API key and adds the required headers.
-      const data = await apiPost('/ai/chat', {
-        system: systemContext,
-        messages: [...chatHistory, { role: 'user', content: text }],
-      });
-      const textResponse = (data.text || '').trim() ||
-        "I couldn't generate a response just now. Try rephrasing your question.";
+      // Cloud mode (authenticated): use the agentic endpoint — it reads THIS
+      // workspace's data via secure server-side tools. Local mode keeps the
+      // data-context /chat proxy.
+      let textResponse;
+      if (APP_CONFIG.requireAuth) {
+        const data = await apiPost('/ai/agent', { message: text, history: chatHistory });
+        textResponse = (data.text || '').trim();
+      } else {
+        const data = await apiPost('/ai/chat', {
+          system: systemContext,
+          messages: [...chatHistory, { role: 'user', content: text }],
+        });
+        textResponse = (data.text || '').trim();
+      }
+      textResponse = textResponse || "I couldn't generate a response just now. Try rephrasing your question.";
       const assistantMessage = { id: Date.now() + 1, role: 'assistant', content: textResponse };
       setMessages(prev => [...prev, assistantMessage]);
     } catch (error) {
