@@ -6,7 +6,9 @@
  *   requireFeature('aiAssistant'|'eInvoicing'|…)          → 402 when locked
  *
  * Usage is computed from the live tables, so limits can never drift from
- * reality. Middleware runs AFTER resolveWorkspace (needs req.workspaceId).
+ * reality. Async (Phase 1b): all repo reads are awaited, so this runs unchanged
+ * on SQLite and Postgres. Middleware runs AFTER resolveWorkspace (needs
+ * req.workspaceId).
  */
 import { getDb } from '../db/index.js';
 import * as repo from '../db/repos.js';
@@ -17,22 +19,22 @@ import { getPlan, withinLimit, effectivePlanId } from './plans.js';
 const startOfMonthISO = (d = new Date()) =>
   new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1)).toISOString();
 
-export function planForWorkspace(db, wsId) {
-  const sub = repo.getSubscription(db, wsId);
+export async function planForWorkspace(db, wsId) {
+  const sub = await repo.getSubscription(db, wsId);
   return { sub, plan: getPlan(effectivePlanId(sub)) };
 }
 
-export function computeUsage(db, wsId) {
+export async function computeUsage(db, wsId) {
   return {
-    clients: repo.countClients(db, wsId),
-    invoicesThisMonth: repo.countInvoicesSince(db, wsId, startOfMonthISO()),
-    members: repo.countMembers(db, wsId),
-    pendingInvites: repo.countPendingInvitations(db, wsId),
+    clients: await repo.countClients(db, wsId),
+    invoicesThisMonth: await repo.countInvoicesSince(db, wsId, startOfMonthISO()),
+    members: await repo.countMembers(db, wsId),
+    pendingInvites: await repo.countPendingInvitations(db, wsId),
   };
 }
 
-export function entitlementsSnapshot(db, wsId) {
-  const { sub, plan } = planForWorkspace(db, wsId);
+export async function entitlementsSnapshot(db, wsId) {
+  const { sub, plan } = await planForWorkspace(db, wsId);
   return {
     subscription: {
       plan: sub.plan, status: sub.status, provider: sub.provider,
@@ -41,7 +43,7 @@ export function entitlementsSnapshot(db, wsId) {
     effectivePlan: plan.id,
     limits: plan.limits,
     features: plan.features,
-    usage: computeUsage(db, wsId),
+    usage: await computeUsage(db, wsId),
   };
 }
 
@@ -56,12 +58,12 @@ function usedFor(resource, usage) {
 }
 
 export function enforceLimit(resource) {
-  return (req, _res, next) => {
+  return async (req, _res, next) => {
     try {
       const db = getDb();
-      const { plan } = planForWorkspace(db, req.workspaceId);
+      const { plan } = await planForWorkspace(db, req.workspaceId);
       const limit = plan.limits[resource];
-      const used = usedFor(resource, computeUsage(db, req.workspaceId));
+      const used = usedFor(resource, await computeUsage(db, req.workspaceId));
       if (!withinLimit(used, limit)) {
         throw new HttpError(
           402,
@@ -75,9 +77,9 @@ export function enforceLimit(resource) {
 }
 
 export function requireFeature(feature) {
-  return (req, _res, next) => {
+  return async (req, _res, next) => {
     try {
-      const { plan } = planForWorkspace(getDb(), req.workspaceId);
+      const { plan } = await planForWorkspace(getDb(), req.workspaceId);
       if (!plan.features[feature]) {
         throw new HttpError(402, `The "${feature}" feature isn't included in your ${plan.name} plan.`,
           { code: 'feature_locked', feature, plan: plan.id });

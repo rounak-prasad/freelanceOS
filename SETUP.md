@@ -127,21 +127,27 @@ migrations in `server/db/migrations/` auto-apply on boot (idempotent; each runs
 once in a transaction, recorded in `schema_migrations`). The file lives at
 `server/.data/freelanceos.sqlite` (override with `SQLITE_PATH`).
 
-### Moving to Postgres (production)
+### Running on Postgres (production)
 
 The schema is deliberately dialect-neutral (UUID string ids, ISO-8601 text
-timestamps, integer money). A Postgres adapter is included in
-`server/db/index.js` (`createPostgresDb`) and translates `?` → `$n`. Because it
-is async, the swap is: (1) set `DATABASE_URL`, (2) make the `repos.js` functions
-and their callers `await` the db calls, (3) run the migrations in
-`server/db/migrations/` (INTEGER→BIGINT for `*_minor`, REAL→DOUBLE PRECISION).
-The route/repo contracts do not change.
+timestamps, integer money). As of **Phase 1b the data layer is fully async**, so
+the included Postgres adapter (`server/db/index.js` → `createPostgresDb`, which
+translates `?` → `$n`) is a live path, not a stub — the repo layer, routes and
+middleware already `await` every query.
 
-> **Status:** the synchronous→async repo cutover that activates this Postgres
-> adapter is the next foundation task (**Phase 1b**) and ships as its own focused
-> PR. It is a pure refactor whose only payoff — live Postgres — cannot be
-> validated in a sandbox without a Postgres instance, so it is intentionally kept
-> out of the feature PRs to protect the green build. Dev/test runs on SQLite.
+To run on Postgres:
+1. Ensure `pg` is installed (it's an optionalDependency) and set
+   `DATABASE_URL=postgres://user:pass@host:5432/freelanceos`.
+2. Apply the migrations to a Postgres database, adjusting column types for the
+   dialect: `INTEGER` → `BIGINT` for the `*_minor` money columns, and `REAL` →
+   `DOUBLE PRECISION` for `fx_rate` / `quantity` / `gst_rate`.
+3. Boot as usual — `initDb()` selects Postgres whenever `DATABASE_URL` is set and
+   otherwise falls back to zero-install SQLite.
+
+The route/repo contracts are identical on both engines; only the connection
+string changes. Dev/test still runs on SQLite, where awaiting the synchronous
+engine is a no-op — which is exactly why the same async code paths are validated
+by the test suite below.
 
 ## v2.1 — Teams, billing & account security
 
@@ -183,14 +189,19 @@ mode) for member/role management and plan/usage/upgrade.
 ## Tests
 
 ```bash
-npm test   # 133 assertions across 6 suites:
+npm test   # 138 assertions across 7 suites:
 #   logic.test.mjs           34 — tax, GST, advance tax, guardrails, FX, cash-flow
 #   foundation.test.mjs      26 — password hashing, JWT, multi-tenant isolation, server-side GST
 #   migrations.test.mjs      15 — migration runner idempotency + schema shape
 #   teams.test.mjs           18 — invitations lifecycle, RBAC, last-owner protection, isolation
 #   billing.test.mjs         22 — plan entitlements, limit math, webhook signature + state
 #   auth_hardening.test.mjs  18 — email/reset tokens, refresh-token rotation & revocation
+#   pg_adapter.test.mjs       5 — Postgres `?`→`$n` placeholder translation
 ```
+
+The whole suite runs on SQLite; because the data layer is async, awaiting the
+synchronous SQLite engine is a no-op, so a green run proves the async code is
+correct for the Postgres engine too.
 
 ## Disclaimer
 

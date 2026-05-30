@@ -27,12 +27,12 @@ export function requireAuth(req, _res, next) {
   }
 }
 
-export function resolveWorkspace(req, _res, next) {
+export async function resolveWorkspace(req, _res, next) {
   try {
     const db = getDb();
     const wsId = req.headers['x-workspace-id'] || req.auth?.wsid;
     if (!wsId) throw new HttpError(400, 'No workspace selected');
-    const m = db.get(
+    const m = await db.get(
       'SELECT role FROM memberships WHERE workspace_id = ? AND user_id = ?',
       [wsId, req.auth.userId]
     );

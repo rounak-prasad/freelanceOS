@@ -10,64 +10,64 @@ import { hashPassword, verifyPassword, sha256, randomToken } from '../server/lib
 let pass = 0, fail = 0;
 const ok = (name, cond, extra = '') => { if (cond) pass++; else { fail++; console.log('  ✗ FAIL:', name, extra); } };
 
-const db = createMemoryDb();
+const db = await createMemoryDb();
 _setDbForTests(db);
 
-function makeUser(email) {
+async function makeUser(email) {
   const now = new Date().toISOString();
   const user = { id: crypto.randomUUID(), email, password_hash: hashPassword('password123'), name: email, created_at: now, updated_at: now };
-  db.tx((tx) => repo.insertUser(tx, user));
+  await db.tx(async (tx) => repo.insertUser(tx, user));
   return user;
 }
 
 console.log('— Email verification tokens —');
-const A = makeUser('a@x.in');
-ok('user starts unverified', repo.findUserById(db, A.id).email_verified === 0);
+const A = await makeUser('a@x.in');
+ok('user starts unverified', (await repo.findUserById(db, A.id)).email_verified === 0);
 const vraw = randomToken();
-repo.createEmailToken(db, { userId: A.id, kind: 'verify', tokenHash: sha256(vraw), ttlHours: 48 });
-ok('cannot consume a verify token as a reset token', repo.consumeEmailToken(db, { tokenHash: sha256(vraw), kind: 'reset' }) === null);
-const consumed = repo.consumeEmailToken(db, { tokenHash: sha256(vraw), kind: 'verify' });
+await repo.createEmailToken(db, { userId: A.id, kind: 'verify', tokenHash: sha256(vraw), ttlHours: 48 });
+ok('cannot consume a verify token as a reset token', (await repo.consumeEmailToken(db, { tokenHash: sha256(vraw), kind: 'reset' })) === null);
+const consumed = await repo.consumeEmailToken(db, { tokenHash: sha256(vraw), kind: 'verify' });
 ok('verify token consumes and returns the user', consumed && consumed.user_id === A.id);
-ok('verify token is single-use', repo.consumeEmailToken(db, { tokenHash: sha256(vraw), kind: 'verify' }) === null);
-repo.setEmailVerified(db, A.id, 1);
-ok('user is now verified', repo.findUserById(db, A.id).email_verified === 1);
+ok('verify token is single-use', (await repo.consumeEmailToken(db, { tokenHash: sha256(vraw), kind: 'verify' })) === null);
+await repo.setEmailVerified(db, A.id, 1);
+ok('user is now verified', (await repo.findUserById(db, A.id)).email_verified === 1);
 
 const eraw = randomToken();
-repo.createEmailToken(db, { userId: A.id, kind: 'verify', tokenHash: sha256(eraw), ttlHours: -1 });
-ok('an expired token is rejected', repo.consumeEmailToken(db, { tokenHash: sha256(eraw), kind: 'verify' }) === null);
+await repo.createEmailToken(db, { userId: A.id, kind: 'verify', tokenHash: sha256(eraw), ttlHours: -1 });
+ok('an expired token is rejected', (await repo.consumeEmailToken(db, { tokenHash: sha256(eraw), kind: 'verify' })) === null);
 
 console.log('— Password reset —');
-const oldHash = repo.findUserById(db, A.id).password_hash;
+const oldHash = (await repo.findUserById(db, A.id)).password_hash;
 const rraw = randomToken();
-repo.createEmailToken(db, { userId: A.id, kind: 'reset', tokenHash: sha256(rraw), ttlHours: 1 });
-const rrow = repo.consumeEmailToken(db, { tokenHash: sha256(rraw), kind: 'reset' });
-ok('reset token valid + single-use', !!rrow && repo.consumeEmailToken(db, { tokenHash: sha256(rraw), kind: 'reset' }) === null);
-repo.updateUserPassword(db, A.id, hashPassword('newpassword123'));
-const after = repo.findUserById(db, A.id);
+await repo.createEmailToken(db, { userId: A.id, kind: 'reset', tokenHash: sha256(rraw), ttlHours: 1 });
+const rrow = await repo.consumeEmailToken(db, { tokenHash: sha256(rraw), kind: 'reset' });
+ok('reset token valid + single-use', !!rrow && (await repo.consumeEmailToken(db, { tokenHash: sha256(rraw), kind: 'reset' })) === null);
+await repo.updateUserPassword(db, A.id, hashPassword('newpassword123'));
+const after = await repo.findUserById(db, A.id);
 ok('password hash changed', after.password_hash !== oldHash);
 ok('new password verifies', verifyPassword('newpassword123', after.password_hash) === true);
 ok('old password rejected', verifyPassword('password123', after.password_hash) === false);
 
 console.log('— Refresh-token rotation —');
 const t1 = randomToken();
-repo.createRefreshToken(db, { userId: A.id, tokenHash: sha256(t1), ttlDays: 30 });
+await repo.createRefreshToken(db, { userId: A.id, tokenHash: sha256(t1), ttlDays: 30 });
 const t2 = randomToken();
-const rot = repo.rotateRefreshToken(db, { oldHash: sha256(t1), newHash: sha256(t2), ttlDays: 30 });
+const rot = await repo.rotateRefreshToken(db, { oldHash: sha256(t1), newHash: sha256(t2), ttlDays: 30 });
 ok('rotation returns the user + a new id', rot.userId === A.id && !!rot.newId);
-ok('old token is revoked after rotation', repo.findRefreshToken(db, sha256(t1)).revoked_at !== null);
-ok('replaced_by links old → new', repo.findRefreshToken(db, sha256(t1)).replaced_by === rot.newId);
-ok('new token is active', repo.findRefreshToken(db, sha256(t2)).revoked_at === null);
+ok('old token is revoked after rotation', (await repo.findRefreshToken(db, sha256(t1))).revoked_at !== null);
+ok('replaced_by links old → new', (await repo.findRefreshToken(db, sha256(t1))).replaced_by === rot.newId);
+ok('new token is active', (await repo.findRefreshToken(db, sha256(t2))).revoked_at === null);
 
-const reuse = repo.rotateRefreshToken(db, { oldHash: sha256(t1), newHash: sha256(randomToken()) });
+const reuse = await repo.rotateRefreshToken(db, { oldHash: sha256(t1), newHash: sha256(randomToken()) });
 ok('reusing a revoked token is flagged (theft signal)', reuse.error === 'revoked' && reuse.userId === A.id);
-ok('unknown token → not_found', repo.rotateRefreshToken(db, { oldHash: 'deadbeef', newHash: 'x' }).error === 'not_found');
+ok('unknown token → not_found', (await repo.rotateRefreshToken(db, { oldHash: 'deadbeef', newHash: 'x' })).error === 'not_found');
 
-repo.revokeAllRefreshTokensForUser(db, A.id);
-ok('revoke-all kills the active token', repo.findRefreshToken(db, sha256(t2)).revoked_at !== null);
+await repo.revokeAllRefreshTokensForUser(db, A.id);
+ok('revoke-all kills the active token', (await repo.findRefreshToken(db, sha256(t2))).revoked_at !== null);
 
 const expRaw = randomToken();
-repo.createRefreshToken(db, { userId: A.id, tokenHash: sha256(expRaw), ttlDays: -1 });
-ok('expired refresh token cannot rotate', repo.rotateRefreshToken(db, { oldHash: sha256(expRaw), newHash: sha256(randomToken()) }).error === 'expired');
+await repo.createRefreshToken(db, { userId: A.id, tokenHash: sha256(expRaw), ttlDays: -1 });
+ok('expired refresh token cannot rotate', (await repo.rotateRefreshToken(db, { oldHash: sha256(expRaw), newHash: sha256(randomToken()) })).error === 'expired');
 
 console.log(`\nRESULT: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
