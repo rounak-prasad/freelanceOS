@@ -9,6 +9,11 @@
  * POST /api/ai/chat  { messages:[{role,content}], system?:string }
  */
 import { Router } from 'express';
+import { requireAuth, resolveWorkspace } from '../lib/authMiddleware.js';
+import { requireFeature } from '../lib/entitlements.js';
+import { asyncHandler, requireFields, HttpError } from '../lib/validate.js';
+import { getDb } from '../db/index.js';
+import { runAgent } from '../lib/agent.js';
 
 const router = Router();
 const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
@@ -54,5 +59,24 @@ router.post('/chat', async (req, res) => {
     res.status(502).json({ error: 'Upstream AI error: ' + e.message });
   }
 });
+
+/**
+ * POST /api/ai/agent  { message, history? } — agentic assistant that can call
+ * workspace-scoped tools (financial summary, overdue invoices, find client, GST
+ * preview, compliance flags) to answer from the user's real data. Gated behind
+ * the aiAssistant plan feature.
+ */
+router.post('/agent', requireAuth, resolveWorkspace, requireFeature('aiAssistant'), asyncHandler(async (req, res) => {
+  requireFields(req.body || {}, ['message']);
+  const history = Array.isArray(req.body.history)
+    ? req.body.history.slice(-8).map((m) => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: String(m.content || '') }))
+    : [];
+  try {
+    const out = await runAgent({ db: getDb(), wsId: req.workspaceId, message: String(req.body.message), history });
+    res.json(out);
+  } catch (e) {
+    throw new HttpError(e.status === 503 ? 503 : 502, e.message || 'AI request failed');
+  }
+}));
 
 export default router;

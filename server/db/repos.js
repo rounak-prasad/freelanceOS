@@ -40,6 +40,27 @@ export async function insertWorkspace(db, w) {
 export const getWorkspace = async (db, id) =>
   db.get('SELECT * FROM workspaces WHERE id = ?', [id]);
 
+/** Update a workspace's tax profile (GSTIN, legal name, state, LUT, etc.). */
+const WORKSPACE_COLS = {
+  name: 'name', legalName: 'legal_name', gstin: 'gstin', pan: 'pan',
+  stateCode: 'state_code', professionKey: 'profession_key',
+  hasLut: 'has_lut', gstRegistered: 'gst_registered',
+};
+export async function updateWorkspace(db, wsId, patch = {}) {
+  const sets = [], vals = [];
+  for (const [k, col] of Object.entries(WORKSPACE_COLS)) {
+    if (patch[k] !== undefined) {
+      sets.push(`${col} = ?`);
+      vals.push(col === 'has_lut' || col === 'gst_registered' ? boolInt(patch[k]) : orNull(patch[k]));
+    }
+  }
+  if (!sets.length) return getWorkspace(db, wsId);
+  sets.push('updated_at = ?'); vals.push(new Date().toISOString());
+  vals.push(wsId);
+  await db.run(`UPDATE workspaces SET ${sets.join(', ')} WHERE id = ?`, vals);
+  return getWorkspace(db, wsId);
+}
+
 export async function insertMembership(db, m) {
   await db.run(
     `INSERT INTO memberships (id, workspace_id, user_id, role, created_at)
@@ -137,9 +158,9 @@ export async function createInvoice(db, wsId, body = {}) {
     );
     for (const l of comp.lines) {
       await tx.run(
-        `INSERT INTO invoice_items (id, invoice_id, description, quantity, unit_price_minor, amount_minor, position)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [crypto.randomUUID(), id, l.description, l.quantity, l.unitPriceMinor, l.amountMinor, l.position]
+        `INSERT INTO invoice_items (id, invoice_id, description, quantity, unit_price_minor, amount_minor, position, hsn_sac, unit)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [crypto.randomUUID(), id, l.description, l.quantity, l.unitPriceMinor, l.amountMinor, l.position, orNull(l.hsnSac), orNull(l.unit)]
       );
     }
   });
@@ -174,9 +195,9 @@ export async function updateInvoice(db, wsId, id, patch = {}) {
       await tx.run('DELETE FROM invoice_items WHERE invoice_id = ?', [id]);
       for (const l of comp.lines) {
         await tx.run(
-          `INSERT INTO invoice_items (id, invoice_id, description, quantity, unit_price_minor, amount_minor, position)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          [crypto.randomUUID(), id, l.description, l.quantity, l.unitPriceMinor, l.amountMinor, l.position]
+          `INSERT INTO invoice_items (id, invoice_id, description, quantity, unit_price_minor, amount_minor, position, hsn_sac, unit)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [crypto.randomUUID(), id, l.description, l.quantity, l.unitPriceMinor, l.amountMinor, l.position, orNull(l.hsnSac), orNull(l.unit)]
         );
       }
       await tx.run(
@@ -464,3 +485,37 @@ export async function updateUserPassword(db, userId, passwordHash) {
   await db.run('UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?',
     [passwordHash, new Date().toISOString(), userId]);
 }
+
+/* ═══════════════════════ Phase 2: e-invoicing / GSTR-1 ═══════════════════════ */
+
+/** Persist the IRP result (IRN, ack, signed QR) on an invoice. */
+export async function setInvoiceEInvoice(db, wsId, id, { irn, ackNo, ackDt, signedQr, status = 'generated' }) {
+  await db.run(
+    `UPDATE invoices SET irn=?, ack_no=?, ack_dt=?, signed_qr=?, einvoice_status=?, updated_at=?
+       WHERE workspace_id=? AND id=?`,
+    [orNull(irn), orNull(ackNo), orNull(ackDt), orNull(signedQr), status, new Date().toISOString(), wsId, id]
+  );
+  return getInvoice(db, wsId, id);
+}
+
+/** Persist the e-way bill number on an invoice. */
+export async function setInvoiceEwayBill(db, wsId, id, { ewbNo }) {
+  await db.run('UPDATE invoices SET ewb_no=?, updated_at=? WHERE workspace_id=? AND id=?',
+    [orNull(ewbNo), new Date().toISOString(), wsId, id]);
+  return getInvoice(db, wsId, id);
+}
+
+/**
+ * Enriched invoices for a GSTR-1 period (joins the buyer's GSTIN/state). Excludes
+ * drafts and cancelled invoices. issue_date is ISO 'YYYY-MM-DD'.
+ */
+export const listInvoicesForGstr1 = async (db, wsId, fromISO, toISO) =>
+  db.all(
+    `SELECT i.*, c.gstin AS client_gstin, c.state_code AS client_state_code,
+            c.name AS client_name, c.country AS client_country
+       FROM invoices i LEFT JOIN clients c ON c.id = i.client_id
+      WHERE i.workspace_id = ? AND i.issue_date >= ? AND i.issue_date <= ?
+        AND i.status != 'cancelled' AND i.status != 'draft'
+      ORDER BY i.issue_date, i.number`,
+    [wsId, fromISO, toISO]
+  );

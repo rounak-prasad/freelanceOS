@@ -33,6 +33,12 @@ infrastructure — GST, TDS, FIRC, 44ADA, UPI and cross-border.
 - 🐘 **Postgres-ready data layer (v2.2)** — one fully-async data layer runs
   unchanged on zero-install SQLite (dev/test) and PostgreSQL (prod, via
   `DATABASE_URL`); the same test suite validates both engines.
+- 🧾 **GST e-invoicing & GSTR-1 (v2.3)** — generate IRNs (NIC e-invoice JSON +
+  signed QR) and e-way bills through an IRP/GSP adapter (deterministic sandbox
+  without credentials), and export a filing-ready GSTR-1 JSON (b2b/b2cl/b2cs/exp).
+- 🤖 **Agentic AI (v2.3)** — the assistant calls workspace-scoped tools over your
+  real data (financials, overdue invoices, GST preview, compliance flags); gated
+  to paid plans, mock-tested, and live with an Anthropic key.
 
 ## Tech
 
@@ -45,7 +51,7 @@ data layer and an Express API server for key-bearing integrations.
 npm install
 npm run dev          # app on localStorage + sample data, zero config
 npm run dev:all      # also starts the API server (auth / teams / billing / AI / payments)
-npm test             # 138 assertions: tax, multi-tenancy, migrations, teams/RBAC, billing, auth, pg adapter
+npm test             # 180 assertions: tax, multi-tenancy, migrations, teams, billing, auth, pg, e-invoice/GSTR-1, AI agent
 ```
 
 See **[SETUP.md](./SETUP.md)** for architecture, environment variables and what

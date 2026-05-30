@@ -81,5 +81,10 @@ const other = await makeUser('other@x.in', 'Other');
 ok('invites do not leak across tenants', (await repo.listInvitations(db, other.ws.id)).length === 0);
 ok('owner workspace still has its invites', (await repo.listInvitations(db, owner.ws.id)).length >= 1);
 
+console.log('— Workspace tax profile —');
+const wsu = await repo.updateWorkspace(db, owner.ws.id, { gstin: '29ABCDE1234F1Z5', legalName: 'Owner LLP', stateCode: '29', hasLut: true, gstRegistered: true });
+ok('tax profile saved (gstin/state/flags)', wsu.gstin === '29ABCDE1234F1Z5' && wsu.state_code === '29' && wsu.has_lut === 1 && wsu.gst_registered === 1);
+ok('partial update preserves other fields', (await repo.updateWorkspace(db, owner.ws.id, { legalName: 'Owner Studio' })).gstin === '29ABCDE1234F1Z5');
+
 console.log(`\nRESULT: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

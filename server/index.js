@@ -23,6 +23,7 @@ import invoicesRouter from './routes/invoices.js';
 import stateRouter from './routes/state.js';
 import membersRouter, { acceptRouter } from './routes/members.js';
 import billingRouter, { webhookRouter as billingWebhookRouter } from './routes/billing.js';
+import gstRouter from './routes/gst.js';
 
 import { getDb, initDb } from './db/index.js';
 import { HttpError } from './lib/validate.js';
@@ -65,7 +66,7 @@ app.get('/api/health', (_req, res) => {
   res.json({
     ok: true,
     service: 'freelanceos-api',
-    version: '2.2.0',
+    version: '2.3.0',
     db: getDb().engine,
     integrations: {
       ai: Boolean(process.env.ANTHROPIC_API_KEY),
@@ -90,6 +91,9 @@ app.use('/api/invitations', acceptRouter);
 // so it isn't gated by requireAuth.
 app.use('/api/billing/webhook', billingWebhookRouter);
 app.use('/api/billing', billingRouter);
+
+// GST e-invoicing, e-way bill and GSTR-1 filing.
+app.use('/api/gst', gstRouter);
 
 // Key-bearing integrations
 app.use('/api/ai', aiRouter);

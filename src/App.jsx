@@ -29,9 +29,10 @@ const Projects = lazy(() => import('./pages/Projects'));
 const Reports = lazy(() => import('./pages/Reports'));
 const Settings = lazy(() => import('./pages/Settings'));
 
-// Enterprise (cloud/auth mode): team management + subscription billing
+// Enterprise (cloud/auth mode): team management + subscription billing + GST filing
 const Team = lazy(() => import('./pages/Team'));
 const Billing = lazy(() => import('./pages/Billing'));
+const GstFiling = lazy(() => import('./pages/GstFiling'));
 
 // New pages
 const ScopeCreep = lazy(() => import('./pages/ScopeCreep'));
@@ -109,6 +110,7 @@ export default function App() {
               <Route path="/projects" element={<Projects />} />
               <Route path="/team" element={<Team />} />
               <Route path="/billing" element={<Billing />} />
+              <Route path="/gst-filing" element={<GstFiling />} />
               <Route path="/settings" element={<Settings />} />
 
               {/* New Pages */}
