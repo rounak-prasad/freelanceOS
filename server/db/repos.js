@@ -11,6 +11,7 @@
 import crypto from 'node:crypto';
 import { boolInt, orNull, HttpError } from '../lib/validate.js';
 import { computeInvoice } from '../lib/invoiceService.js';
+import { encryptString, decryptString } from '../lib/crypto.js';
 
 /* ───────────────────────── users / workspaces ───────────────────────── */
 
@@ -39,6 +40,27 @@ export async function insertWorkspace(db, w) {
 }
 export const getWorkspace = async (db, id) =>
   db.get('SELECT * FROM workspaces WHERE id = ?', [id]);
+
+/** Update a workspace's tax profile (GSTIN, legal name, state, LUT, etc.). */
+const WORKSPACE_COLS = {
+  name: 'name', legalName: 'legal_name', gstin: 'gstin', pan: 'pan',
+  stateCode: 'state_code', professionKey: 'profession_key',
+  hasLut: 'has_lut', gstRegistered: 'gst_registered',
+};
+export async function updateWorkspace(db, wsId, patch = {}) {
+  const sets = [], vals = [];
+  for (const [k, col] of Object.entries(WORKSPACE_COLS)) {
+    if (patch[k] !== undefined) {
+      sets.push(`${col} = ?`);
+      vals.push(col === 'has_lut' || col === 'gst_registered' ? boolInt(patch[k]) : orNull(patch[k]));
+    }
+  }
+  if (!sets.length) return getWorkspace(db, wsId);
+  sets.push('updated_at = ?'); vals.push(new Date().toISOString());
+  vals.push(wsId);
+  await db.run(`UPDATE workspaces SET ${sets.join(', ')} WHERE id = ?`, vals);
+  return getWorkspace(db, wsId);
+}
 
 export async function insertMembership(db, m) {
   await db.run(
@@ -137,9 +159,9 @@ export async function createInvoice(db, wsId, body = {}) {
     );
     for (const l of comp.lines) {
       await tx.run(
-        `INSERT INTO invoice_items (id, invoice_id, description, quantity, unit_price_minor, amount_minor, position)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [crypto.randomUUID(), id, l.description, l.quantity, l.unitPriceMinor, l.amountMinor, l.position]
+        `INSERT INTO invoice_items (id, invoice_id, description, quantity, unit_price_minor, amount_minor, position, hsn_sac, unit)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [crypto.randomUUID(), id, l.description, l.quantity, l.unitPriceMinor, l.amountMinor, l.position, orNull(l.hsnSac), orNull(l.unit)]
       );
     }
   });
@@ -174,9 +196,9 @@ export async function updateInvoice(db, wsId, id, patch = {}) {
       await tx.run('DELETE FROM invoice_items WHERE invoice_id = ?', [id]);
       for (const l of comp.lines) {
         await tx.run(
-          `INSERT INTO invoice_items (id, invoice_id, description, quantity, unit_price_minor, amount_minor, position)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          [crypto.randomUUID(), id, l.description, l.quantity, l.unitPriceMinor, l.amountMinor, l.position]
+          `INSERT INTO invoice_items (id, invoice_id, description, quantity, unit_price_minor, amount_minor, position, hsn_sac, unit)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [crypto.randomUUID(), id, l.description, l.quantity, l.unitPriceMinor, l.amountMinor, l.position, orNull(l.hsnSac), orNull(l.unit)]
         );
       }
       await tx.run(
@@ -207,16 +229,18 @@ export async function deleteInvoice(db, wsId, id) {
 
 export async function ensureAppState(db, wsId) {
   if (!(await db.get('SELECT 1 AS x FROM app_state WHERE workspace_id = ?', [wsId]))) {
-    await db.run('INSERT INTO app_state (workspace_id, data, updated_at) VALUES (?, ?, ?)', [wsId, '{}', new Date().toISOString()]);
+    await db.run('INSERT INTO app_state (workspace_id, data, updated_at) VALUES (?, ?, ?)', [wsId, encryptString('{}'), new Date().toISOString()]);
   }
 }
+// app_state holds the tenant's most sensitive data (bank/UPI/FIRA), so it is
+// encrypted at rest when DATA_ENCRYPTION_KEY is set (pass-through otherwise).
 export async function getAppState(db, wsId) {
   const r = await db.get('SELECT data FROM app_state WHERE workspace_id = ?', [wsId]);
   if (!r) return {};
-  try { return JSON.parse(r.data || '{}'); } catch { return {}; }
+  try { return JSON.parse(decryptString(r.data) || '{}'); } catch { return {}; }
 }
 export async function setAppState(db, wsId, data) {
-  const json = JSON.stringify(data ?? {});
+  const json = encryptString(JSON.stringify(data ?? {}));
   const now = new Date().toISOString();
   if (await db.get('SELECT 1 AS x FROM app_state WHERE workspace_id = ?', [wsId])) {
     await db.run('UPDATE app_state SET data = ?, updated_at = ? WHERE workspace_id = ?', [json, now, wsId]);
@@ -463,4 +487,70 @@ export async function setEmailVerified(db, userId, val = 1) {
 export async function updateUserPassword(db, userId, passwordHash) {
   await db.run('UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?',
     [passwordHash, new Date().toISOString(), userId]);
+}
+
+/* ═══════════════════════ Phase 2: e-invoicing / GSTR-1 ═══════════════════════ */
+
+/** Persist the IRP result (IRN, ack, signed QR) on an invoice. */
+export async function setInvoiceEInvoice(db, wsId, id, { irn, ackNo, ackDt, signedQr, status = 'generated' }) {
+  await db.run(
+    `UPDATE invoices SET irn=?, ack_no=?, ack_dt=?, signed_qr=?, einvoice_status=?, updated_at=?
+       WHERE workspace_id=? AND id=?`,
+    [orNull(irn), orNull(ackNo), orNull(ackDt), orNull(signedQr), status, new Date().toISOString(), wsId, id]
+  );
+  return getInvoice(db, wsId, id);
+}
+
+/** Persist the e-way bill number on an invoice. */
+export async function setInvoiceEwayBill(db, wsId, id, { ewbNo }) {
+  await db.run('UPDATE invoices SET ewb_no=?, updated_at=? WHERE workspace_id=? AND id=?',
+    [orNull(ewbNo), new Date().toISOString(), wsId, id]);
+  return getInvoice(db, wsId, id);
+}
+
+/**
+ * Enriched invoices for a GSTR-1 period (joins the buyer's GSTIN/state). Excludes
+ * drafts and cancelled invoices. issue_date is ISO 'YYYY-MM-DD'.
+ */
+export const listInvoicesForGstr1 = async (db, wsId, fromISO, toISO) =>
+  db.all(
+    `SELECT i.*, c.gstin AS client_gstin, c.state_code AS client_state_code,
+            c.name AS client_name, c.country AS client_country
+       FROM invoices i LEFT JOIN clients c ON c.id = i.client_id
+      WHERE i.workspace_id = ? AND i.issue_date >= ? AND i.issue_date <= ?
+        AND i.status != 'cancelled' AND i.status != 'draft'
+      ORDER BY i.issue_date, i.number`,
+    [wsId, fromISO, toISO]
+  );
+
+/* ═══════════════════════ Phase 3: audit log / erasure ═══════════════════════ */
+
+/** Paginated, workspace-scoped audit entries (newest first). */
+export const listAuditLog = async (db, wsId, { limit = 100, offset = 0, action = null } = {}) => {
+  const lim = Math.min(500, Math.max(1, Number(limit) || 100));
+  const off = Math.max(0, Number(offset) || 0);
+  if (action) {
+    return db.all(
+      'SELECT * FROM audit_log WHERE workspace_id = ? AND action LIKE ? ORDER BY created_at DESC LIMIT ? OFFSET ?',
+      [wsId, `${action}%`, lim, off]
+    );
+  }
+  return db.all(
+    'SELECT * FROM audit_log WHERE workspace_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?',
+    [wsId, lim, off]
+  );
+};
+
+export const countAuditLog = async (db, wsId) =>
+  (await db.get('SELECT COUNT(*) AS n FROM audit_log WHERE workspace_id = ?', [wsId]))?.n || 0;
+
+/**
+ * Hard-delete a user (DPDP/GDPR right to erasure). FK cascades remove the
+ * workspaces they OWN (and all of those workspaces' data) plus the user's
+ * memberships everywhere; workspaces owned by others survive. Requires
+ * PRAGMA foreign_keys = ON (set on every SQLite connection) / Postgres FKs.
+ */
+export async function deleteUser(db, userId) {
+  const r = await db.run('DELETE FROM users WHERE id = ?', [userId]);
+  return (r.changes || 0) > 0;
 }

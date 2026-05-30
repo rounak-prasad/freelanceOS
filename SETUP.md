@@ -42,6 +42,9 @@ The Vite dev server proxies `/api/*` to the API automatically (see
 | `RAZORPAY_WEBHOOK_SECRET` | Verifies the payment + subscription webhooks |
 | `RAZORPAY_PLAN_PRO` / `RAZORPAY_PLAN_TEAM` | Razorpay subscription plan ids (billing tiers) |
 | `APP_BASE_URL` | Base URL for invite / verify / password-reset email links |
+| `IRP_BASE_URL` / `IRP_API_KEY` | GST e-invoicing + e-way bill via a GSP/ASP (sandbox without them) |
+| `DATA_ENCRYPTION_KEY` | Enables AES-256-GCM encryption at rest for the app_state blob |
+| `BACKUP_DIR` | Output directory for the all-tenant backup CLI (`npm run backup`) |
 | `SKYDO_API_KEY` / `WISE_API_TOKEN` | Optional cross-border / auto-FIRA partners |
 
 See `.env.example` for the full list.
@@ -186,17 +189,71 @@ local mode preserved):
 **Frontend** — `Team` and `Billing & Plan` pages (shown in the sidebar in cloud
 mode) for member/role management and plan/usage/upgrade.
 
+## v2.3 — GST e-invoicing, e-way bill & agentic AI
+
+**GST filing** (`server/lib/einvoice.js`, `ewaybill.js`, `gstr1.js`,
+`irpClient.js`; routes in `server/routes/gst.js`)
+- `POST /api/gst/invoices/:id/einvoice` generates the IRN (NIC e-invoice JSON +
+  signed QR); `…/preview` is a dry run with validation; `…/ewaybill` builds an
+  e-way bill. `GET /api/gst/gstr1?period=MMYYYY` exports a filing-ready GSTR-1
+  JSON (b2b / b2cl / b2cs / exp) + a summary.
+- Per-line GST is derived from the invoice's authoritative rate and reconciles to
+  `ValDtls` by construction (the IRP rejects mismatched totals). Line items gained
+  `hsn_sac` + `unit` (migration 0003); set your workspace GSTIN/legal-name/state
+  on the **GST Filing** page (`PATCH /api/team/workspace`).
+- The IRP/e-way-bill submission goes through an adapter: **deterministic sandbox**
+  by default (offline IRNs), or **live via a GSP** when `IRP_BASE_URL`/`IRP_API_KEY`
+  are set. e-invoicing is gated to the `eInvoicing` plan feature (Pro/Team).
+- Going live needs a GSP/ASP contract and the GSTIN enabled for e-invoicing on
+  the government portal.
+
+**Agentic AI** (`server/lib/aiTools.js`, `agent.js`; `POST /api/ai/agent`)
+- The assistant calls **workspace-scoped tools** over the user's real data —
+  `get_financial_summary`, `list_overdue_invoices`, `find_client`, `gst_preview`,
+  `compliance_flags` — in a tool-use loop. Tools are bound to `req.workspaceId`,
+  so the agent can never read another tenant's data.
+- The model call is injectable (tests use a deterministic mock); production uses
+  Anthropic tool-use behind `ANTHROPIC_API_KEY`. Gated to the `aiAssistant` plan
+  feature. The chat widget uses the agent in cloud mode and the legacy
+  data-context `/api/ai/chat` proxy in local mode.
+
+## v2.4 — Security & compliance
+
+- **Encryption at rest** (`server/lib/crypto.js`): the per-tenant `app_state`
+  blob (bank / UPI / foreign-account & FIRA data) is sealed with AES-256-GCM when
+  `DATA_ENCRYPTION_KEY` is set. Pass-through without a key (dev); legacy plaintext
+  rows decrypt unchanged, so enabling it is non-breaking.
+- **HTTP hardening** (`server/lib/security.js`): security headers on every
+  response (nosniff, frame-deny, locked CSP, HSTS over HTTPS), `x-powered-by`
+  removed, and a JSON-object body guard. Auth is Bearer-token (not cookies), so
+  the API isn't exposed to classic CSRF.
+- **Audit-log viewer** (`/api/admin/audit`, owner/admin): a paginated,
+  workspace-scoped view of every mutation already recorded in `audit_log`.
+- **Backups** (`server/lib/backup.js`; `/api/admin/backup` + `/restore`): a full
+  per-tenant JSON snapshot (owner), restorable for DR; plus `npm run backup` — an
+  all-tenant CLI to schedule via cron.
+- **DPDP/GDPR data rights** (`/api/account`): `GET /export` (portability) and a
+  password-confirmed `POST /delete` (erasure) that cascades — workspaces you own
+  and their data are deleted; memberships elsewhere are removed and those
+  workspaces survive.
+- **Frontend:** a **Security & Data** page — audit log, data export, workspace
+  backup, and the account-deletion danger zone.
+
 ## Tests
 
 ```bash
-npm test   # 138 assertions across 7 suites:
+npm test   # 212 assertions across 11 suites:
 #   logic.test.mjs           34 — tax, GST, advance tax, guardrails, FX, cash-flow
 #   foundation.test.mjs      26 — password hashing, JWT, multi-tenant isolation, server-side GST
 #   migrations.test.mjs      15 — migration runner idempotency + schema shape
-#   teams.test.mjs           18 — invitations lifecycle, RBAC, last-owner protection, isolation
+#   teams.test.mjs           20 — invitations, RBAC, last-owner protection, workspace tax profile
 #   billing.test.mjs         22 — plan entitlements, limit math, webhook signature + state
 #   auth_hardening.test.mjs  18 — email/reset tokens, refresh-token rotation & revocation
 #   pg_adapter.test.mjs       5 — Postgres `?`→`$n` placeholder translation
+#   einvoice.test.mjs        29 — IRP payload + validation, e-way bill, GSTR-1 sections, sandbox IRN
+#   ai_agent.test.mjs        11 — workspace-scoped tools + agent loop (mock model)
+#   security.test.mjs        15 — field encryption, app_state-at-rest, headers, body guard
+#   compliance.test.mjs      17 — backup export/restore, audit viewer, DPDP account erasure
 ```
 
 The whole suite runs on SQLite; because the data layer is async, awaiting the

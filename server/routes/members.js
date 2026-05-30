@@ -27,6 +27,17 @@ const ASSIGNABLE_ROLES = ['admin', 'member', 'viewer']; // 'owner' is special-ca
 
 router.use(requireAuth, resolveWorkspace);
 
+// Workspace tax profile — needed for GST e-invoicing (GSTIN, legal name, state).
+router.get('/workspace', asyncHandler(async (req, res) => {
+  res.json(await repo.getWorkspace(getDb(), req.workspaceId));
+}));
+
+router.patch('/workspace', requireRole('owner', 'admin'), asyncHandler(async (req, res) => {
+  const ws = await repo.updateWorkspace(getDb(), req.workspaceId, req.body || {});
+  writeAudit(getDb(), { workspaceId: req.workspaceId, userId: req.auth.userId, action: 'workspace.update', entityType: 'workspace', entityId: req.workspaceId, ip: req.ip });
+  res.json(ws);
+}));
+
 router.get('/members', asyncHandler(async (req, res) => {
   res.json(await repo.listMembers(getDb(), req.workspaceId));
 }));

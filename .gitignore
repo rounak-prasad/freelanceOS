@@ -14,6 +14,9 @@ dist-ssr/
 # Server state store (file-backed dev DB)
 server/.data/
 
+# Local backup output (ops/backup.mjs)
+backups/
+
 # Logs
 *.log
 vite-dev.out.log

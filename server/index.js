@@ -23,10 +23,15 @@ import invoicesRouter from './routes/invoices.js';
 import stateRouter from './routes/state.js';
 import membersRouter, { acceptRouter } from './routes/members.js';
 import billingRouter, { webhookRouter as billingWebhookRouter } from './routes/billing.js';
+import gstRouter from './routes/gst.js';
+import accountRouter from './routes/account.js';
+import adminRouter from './routes/admin.js';
 
 import { getDb, initDb } from './db/index.js';
 import { HttpError } from './lib/validate.js';
 import { jwtSecret } from './lib/authMiddleware.js';
+import { securityHeaders, enforceJsonObject } from './lib/security.js';
+import { isEncryptionEnabled } from './lib/crypto.js';
 
 dotenv.config();
 
@@ -36,6 +41,8 @@ await initDb();
 
 const app = express();
 app.set('trust proxy', 1); // so req.ip is correct behind a proxy/load balancer
+app.disable('x-powered-by');
+app.use(securityHeaders); // security headers on every response (Phase 3)
 
 // Razorpay webhook needs the raw body for signature verification — capture it.
 app.use(express.json({
@@ -43,6 +50,7 @@ app.use(express.json({
   limit: '2mb',
 }));
 app.use(cors({ origin: process.env.CORS_ORIGIN || true }));
+app.use(enforceJsonObject); // reject non-object JSON bodies on mutations
 
 /* ---- Minimal in-memory rate limiter for auth (swap for Redis in prod) ---- */
 const rl = new Map();
@@ -65,12 +73,14 @@ app.get('/api/health', (_req, res) => {
   res.json({
     ok: true,
     service: 'freelanceos-api',
-    version: '2.2.0',
+    version: '2.4.0',
     db: getDb().engine,
+    encryptionAtRest: isEncryptionEnabled(),
     integrations: {
       ai: Boolean(process.env.ANTHROPIC_API_KEY),
       razorpay: Boolean(process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET),
       billingWebhook: Boolean(process.env.RAZORPAY_WEBHOOK_SECRET),
+      irp: Boolean(process.env.IRP_BASE_URL && process.env.IRP_API_KEY),
     },
     time: new Date().toISOString(),
   });
@@ -91,6 +101,13 @@ app.use('/api/invitations', acceptRouter);
 app.use('/api/billing/webhook', billingWebhookRouter);
 app.use('/api/billing', billingRouter);
 
+// GST e-invoicing, e-way bill and GSTR-1 filing.
+app.use('/api/gst', gstRouter);
+
+// Account (DPDP/GDPR export + erasure) and workspace admin (audit log, backup).
+app.use('/api/account', rateLimit({ max: 30 }), accountRouter);
+app.use('/api/admin', adminRouter);
+
 // Key-bearing integrations
 app.use('/api/ai', aiRouter);
 app.use('/api/payments', paymentsRouter);
@@ -100,6 +117,10 @@ app.use('/api/crossborder', crossborderRouter);
 app.use((err, _req, res, _next) => {
   if (err instanceof HttpError) {
     return res.status(err.status).json({ error: err.message, ...(err.details ? { details: err.details } : {}) });
+  }
+  // Honour a numeric `status` on plain errors (e.g. enforceJsonObject, agent 503).
+  if (err && Number.isInteger(err.status) && err.status >= 400 && err.status < 600) {
+    return res.status(err.status).json({ error: err.message || 'Request failed' });
   }
   console.error('[api] error:', err);
   res.status(500).json({ error: 'Internal server error' });
