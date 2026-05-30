@@ -24,14 +24,15 @@ import stateRouter from './routes/state.js';
 import membersRouter, { acceptRouter } from './routes/members.js';
 import billingRouter, { webhookRouter as billingWebhookRouter } from './routes/billing.js';
 
-import { getDb } from './db/index.js';
+import { getDb, initDb } from './db/index.js';
 import { HttpError } from './lib/validate.js';
 import { jwtSecret } from './lib/authMiddleware.js';
 
 dotenv.config();
 
-// Open + migrate the database on boot (idempotent).
-getDb();
+// Open + migrate the database on boot (idempotent). Async (Phase 1b) so the
+// same path works for SQLite (dev/test) and Postgres (prod, via DATABASE_URL).
+await initDb();
 
 const app = express();
 app.set('trust proxy', 1); // so req.ip is correct behind a proxy/load balancer
@@ -64,7 +65,7 @@ app.get('/api/health', (_req, res) => {
   res.json({
     ok: true,
     service: 'freelanceos-api',
-    version: '2.1.0',
+    version: '2.2.0',
     db: getDb().engine,
     integrations: {
       ai: Boolean(process.env.ANTHROPIC_API_KEY),

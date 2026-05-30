@@ -30,6 +30,9 @@ infrastructure — GST, TDS, FIRC, 44ADA, UPI and cross-border.
   rotating refresh tokens (reuse-detection) on top of the existing auth.
 - 🧱 **Versioned DB migrations (v2.1)** — ordered, tracked, idempotent migrations
   (`server/db/migrations/`) replace the single-schema boot; Postgres-ready.
+- 🐘 **Postgres-ready data layer (v2.2)** — one fully-async data layer runs
+  unchanged on zero-install SQLite (dev/test) and PostgreSQL (prod, via
+  `DATABASE_URL`); the same test suite validates both engines.
 
 ## Tech
 
@@ -42,7 +45,7 @@ data layer and an Express API server for key-bearing integrations.
 npm install
 npm run dev          # app on localStorage + sample data, zero config
 npm run dev:all      # also starts the API server (auth / teams / billing / AI / payments)
-npm test             # 133 assertions: tax, multi-tenancy, migrations, teams/RBAC, billing, auth
+npm test             # 138 assertions: tax, multi-tenancy, migrations, teams/RBAC, billing, auth, pg adapter
 ```
 
 See **[SETUP.md](./SETUP.md)** for architecture, environment variables and what

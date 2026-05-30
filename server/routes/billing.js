@@ -39,22 +39,23 @@ const publicPlans = () => PLAN_IDS.map((id) => {
 
 /* ── public webhook router (no auth) ── */
 export const webhookRouter = Router();
-webhookRouter.post('/', (req, res) => {
+webhookRouter.post('/', asyncHandler(async (req, res) => {
   const secret = process.env.RAZORPAY_WEBHOOK_SECRET;
   if (!secret) return res.status(503).json({ error: 'Webhook secret not configured' });
   if (!verifyRazorpaySignature(req.rawBody, req.headers['x-razorpay-signature'], secret)) {
     return res.status(400).json({ error: 'Invalid signature' });
   }
-  applyBillingWebhook(getDb(), req.body || {});
+  await applyBillingWebhook(getDb(), req.body || {});
   res.json({ received: true });
-});
+}));
 
 /* ── authenticated billing router ── */
 const router = Router();
 router.use(requireAuth, resolveWorkspace);
 
-router.get('/', asyncHandler((req, res) => {
-  res.json({ ...entitlementsSnapshot(getDb(), req.workspaceId), plans: publicPlans(), razorpayConfigured: razorpayConfigured() });
+router.get('/', asyncHandler(async (req, res) => {
+  const snapshot = await entitlementsSnapshot(getDb(), req.workspaceId);
+  res.json({ ...snapshot, plans: publicPlans(), razorpayConfigured: razorpayConfigured() });
 }));
 
 router.post('/checkout', requireRole('owner', 'admin'), asyncHandler(async (req, res) => {
@@ -64,8 +65,8 @@ router.post('/checkout', requireRole('owner', 'admin'), asyncHandler(async (req,
 
   // Downgrade to Free is immediate and free.
   if (planId === 'free') {
-    const sub = repo.upsertSubscription(db, req.workspaceId, { plan: 'free', status: 'active', provider: null, provider_subscription_id: null });
-    repo.insertBillingEvent(db, { workspaceId: req.workspaceId, provider: 'local', eventType: 'downgrade.free' });
+    const sub = await repo.upsertSubscription(db, req.workspaceId, { plan: 'free', status: 'active', provider: null, provider_subscription_id: null });
+    await repo.insertBillingEvent(db, { workspaceId: req.workspaceId, provider: 'local', eventType: 'downgrade.free' });
     writeAudit(db, { workspaceId: req.workspaceId, userId: req.auth.userId, action: 'billing.downgrade', entityType: 'subscription', ip: req.ip, meta: { plan: 'free' } });
     return res.json({ ok: true, subscription: sub });
   }
@@ -80,11 +81,11 @@ router.post('/checkout', requireRole('owner', 'admin'), asyncHandler(async (req,
         customer_notify: 1,
         notes: { workspaceId: req.workspaceId, plan: planId, source: 'FreelanceOS' },
       });
-      repo.upsertSubscription(db, req.workspaceId, {
+      await repo.upsertSubscription(db, req.workspaceId, {
         plan: planId, status: 'trialing', provider: 'razorpay',
         provider_subscription_id: subscription.id, seats: getPlan(planId).limits.members ?? 1,
       });
-      repo.insertBillingEvent(db, { workspaceId: req.workspaceId, provider: 'razorpay', eventType: 'subscription.create', payload: { id: subscription.id, plan: planId } });
+      await repo.insertBillingEvent(db, { workspaceId: req.workspaceId, provider: 'razorpay', eventType: 'subscription.create', payload: { id: subscription.id, plan: planId } });
       writeAudit(db, { workspaceId: req.workspaceId, userId: req.auth.userId, action: 'billing.subscribe', entityType: 'subscription', entityId: subscription.id, ip: req.ip, meta: { plan: planId, provider: 'razorpay' } });
       return res.status(201).json({ provider: 'razorpay', subscriptionId: subscription.id, shortUrl: subscription.short_url, status: 'trialing' });
     } catch (e) {
@@ -93,25 +94,25 @@ router.post('/checkout', requireRole('owner', 'admin'), asyncHandler(async (req,
   }
 
   // Test/local mode — activate immediately and flag it so the UI can label it.
-  const sub = repo.upsertSubscription(db, req.workspaceId, {
+  const sub = await repo.upsertSubscription(db, req.workspaceId, {
     plan: planId, status: 'active', provider: null, provider_subscription_id: null,
     seats: getPlan(planId).limits.members ?? 1,
     current_period_end: new Date(Date.now() + 30 * 86400 * 1000).toISOString(),
   });
-  repo.insertBillingEvent(db, { workspaceId: req.workspaceId, provider: 'local', eventType: 'subscription.activate.testmode', payload: { plan: planId } });
+  await repo.insertBillingEvent(db, { workspaceId: req.workspaceId, provider: 'local', eventType: 'subscription.activate.testmode', payload: { plan: planId } });
   writeAudit(db, { workspaceId: req.workspaceId, userId: req.auth.userId, action: 'billing.subscribe', entityType: 'subscription', ip: req.ip, meta: { plan: planId, provider: 'test' } });
   res.status(201).json({ testMode: true, subscription: sub });
 }));
 
 router.post('/cancel', requireRole('owner', 'admin'), asyncHandler(async (req, res) => {
   const db = getDb();
-  const cur = repo.getSubscription(db, req.workspaceId);
+  const cur = await repo.getSubscription(db, req.workspaceId);
   if (cur.provider === 'razorpay' && cur.provider_subscription_id && razorpayConfigured()) {
     try { const rzp = await getClient(); await rzp.subscriptions.cancel(cur.provider_subscription_id); }
     catch (e) { console.warn('[billing] razorpay cancel failed (cancelling locally):', e.message); }
   }
-  const sub = repo.upsertSubscription(db, req.workspaceId, { status: 'cancelled' });
-  repo.insertBillingEvent(db, { workspaceId: req.workspaceId, provider: cur.provider || 'local', eventType: 'subscription.cancel' });
+  const sub = await repo.upsertSubscription(db, req.workspaceId, { status: 'cancelled' });
+  await repo.insertBillingEvent(db, { workspaceId: req.workspaceId, provider: cur.provider || 'local', eventType: 'subscription.cancel' });
   writeAudit(db, { workspaceId: req.workspaceId, userId: req.auth.userId, action: 'billing.cancel', entityType: 'subscription', ip: req.ip });
   res.json({ ok: true, subscription: sub });
 }));
