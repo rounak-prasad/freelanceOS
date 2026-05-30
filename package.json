@@ -1,15 +1,16 @@
 {
   "name": "freelanceos",
   "private": true,
-  "version": "2.3.0",
+  "version": "2.4.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
     "server": "node server/index.js",
+    "backup": "node ops/backup.mjs",
     "dev:all": "concurrently -k -n api,web -c green,cyan \"npm run server\" \"npm run dev\"",
-    "test": "node tests/logic.test.mjs && node tests/foundation.test.mjs && node tests/migrations.test.mjs && node tests/teams.test.mjs && node tests/billing.test.mjs && node tests/auth_hardening.test.mjs && node tests/pg_adapter.test.mjs && node tests/einvoice.test.mjs && node tests/ai_agent.test.mjs",
+    "test": "node tests/logic.test.mjs && node tests/foundation.test.mjs && node tests/migrations.test.mjs && node tests/teams.test.mjs && node tests/billing.test.mjs && node tests/auth_hardening.test.mjs && node tests/pg_adapter.test.mjs && node tests/einvoice.test.mjs && node tests/ai_agent.test.mjs && node tests/security.test.mjs && node tests/compliance.test.mjs",
     "test:foundation": "node tests/foundation.test.mjs"
   },
   "dependencies": {

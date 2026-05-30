@@ -39,6 +39,9 @@ infrastructure — GST, TDS, FIRC, 44ADA, UPI and cross-border.
 - 🤖 **Agentic AI (v2.3)** — the assistant calls workspace-scoped tools over your
   real data (financials, overdue invoices, GST preview, compliance flags); gated
   to paid plans, mock-tested, and live with an Anthropic key.
+- 🔒 **Security & compliance (v2.4)** — AES-256-GCM encryption at rest for
+  sensitive data, hardened HTTP headers, an admin audit-log viewer, per-tenant
+  backups (+ a nightly all-tenant CLI), and DPDP/GDPR data export & account erasure.
 
 ## Tech
 
@@ -51,7 +54,7 @@ data layer and an Express API server for key-bearing integrations.
 npm install
 npm run dev          # app on localStorage + sample data, zero config
 npm run dev:all      # also starts the API server (auth / teams / billing / AI / payments)
-npm test             # 180 assertions: tax, multi-tenancy, migrations, teams, billing, auth, pg, e-invoice/GSTR-1, AI agent
+npm test             # 212 assertions: tax, multi-tenancy, migrations, teams, billing, auth, pg, e-invoice/GSTR-1, AI agent, security, compliance
 ```
 
 See **[SETUP.md](./SETUP.md)** for architecture, environment variables and what

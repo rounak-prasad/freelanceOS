@@ -8,7 +8,7 @@ import {
   FileSignature, ScrollText, Linkedin,
   Settings, ChevronLeft, ChevronRight, Menu, X, Zap,
   Activity, Workflow, ShieldAlert, Timer, Briefcase,
-  ShieldCheck, Globe, LineChart, UserPlus, CreditCard, FileCheck2
+  ShieldCheck, Globe, LineChart, UserPlus, CreditCard, FileCheck2, Lock
 } from 'lucide-react';
 
 const navSections = [
@@ -64,6 +64,7 @@ const navSections = [
       { path: '/team', label: 'Team', icon: UserPlus },
       { path: '/billing', label: 'Billing & Plan', icon: CreditCard },
       { path: '/gst-filing', label: 'GST Filing', icon: FileCheck2 },
+      { path: '/security', label: 'Security & Data', icon: Lock },
     ]
   },
   {
